@@ -94,6 +94,8 @@
   .avatar{width:30px;height:30px;border-radius:50%;background:var(--accent);color:#fff;flex:none;
     display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:600;}
   .side-foot .nm{flex:1;font-size:13px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .acctbtn{text-align:left;}
+  .acctbtn:hover{text-decoration:underline;}
   .linkbtn{font-size:12px;color:var(--muted);}
   .linkbtn:hover{color:var(--ink);text-decoration:underline;}
 
@@ -252,8 +254,8 @@ async function enterApp(showEmptyView){
         <button class="btn block" id="newRoom">＋ 開新房間</button></div>
         <div class="side-list" id="roomList"></div>
         <div class="side-foot">
-          <div class="avatar">${esc((state.username||'?').slice(0,1).toUpperCase())}</div>
-          <div class="nm">${esc(state.username)}</div>
+          <div class="avatar">${esc((state.display||state.username||'?').slice(0,1).toUpperCase())}</div>
+          <button class="nm acctbtn" id="acct" title="帳號設定 · 改名">${esc(state.display||state.username)}</button>
           <button class="linkbtn" id="logout">登出</button>
         </div>
       </aside>
@@ -261,6 +263,7 @@ async function enterApp(showEmptyView){
     </div>`;
   $('newRoom').onclick=showCreate;
   $('logout').onclick=logout;
+  $('acct').onclick=openAccountSettings;
   await loadRooms();
   if(showEmptyView) showEmpty();
 }
@@ -533,6 +536,29 @@ function showChat(wsPath, roomId, roomName, myName){
 function renderText(t){
   return esc(t).replace(/(^|[\s(])@([^\s@,，。!！?？]+)/g, (m,p,n)=>`${p}<span class="mention">@${n}</span>`);
 }
+// 帳號設定:改自己的顯示名稱(側欄左下名字 → 點開)
+function openAccountSettings(){
+  const ov=el(`<div class="overlay" id="ov"><div class="modal">
+    <div class="modal-head"><div class="mtitle">帳號設定</div><button class="back" id="ovX">✕</button></div>
+    <div class="modal-body">
+      <label style="margin-top:0;">顯示名稱(別人在房間看到的名字)</label>
+      <div class="row" style="gap:8px;"><input id="dnInput" value="${esc(state.display||state.username)}" style="flex:1;"><button class="btn sm" id="dnSave">儲存</button></div>
+      <div id="dnMsg"></div>
+      <div class="small muted" style="margin-top:16px;">帳號:<b>${esc(state.username)}</b>(登入用,不可改)</div>
+    </div></div></div>`);
+  document.body.appendChild(ov);
+  $('ovX').onclick=()=>ov.remove();
+  ov.onclick=e=>{ if(e.target===ov) ov.remove(); };
+  $('dnSave').onclick=async()=>{
+    try{ const r=await api('/set-display','POST',{display_name:$('dnInput').value.trim()});
+      state.display=r.display_name; $('dnMsg').innerHTML='<div class="msg ok">已更新(在新進入的房間/重整後全面生效)</div>';
+      const nm=document.querySelector('.side-foot .nm'); if(nm) nm.textContent=state.display;
+      const av=document.querySelector('.side-foot .avatar'); if(av) av.textContent=(state.display||'?').slice(0,1).toUpperCase();
+      await loadRooms();
+    }catch(e){ $('dnMsg').innerHTML=`<div class="msg err">${esc(e.message)}</div>`; }
+  };
+}
+
 // 房內右上角 ⚙ → 設定 / 邀請(學 Slack/ChatGPT:進房後才邀人)
 function openSettings(rid){
   const ov=el(`<div class="overlay" id="ov"><div class="modal">
