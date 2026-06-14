@@ -58,6 +58,11 @@
   .authcard{width:100%;max-width:380px;background:#fff;border:1px solid var(--line);border-radius:16px;
     padding:30px 26px;box-shadow:var(--shadow);}
   .brand{font-size:22px;font-weight:700;letter-spacing:-.02em;}
+  .logo{width:34px;height:34px;display:block;border-radius:9px;}
+  .brandrow{display:flex;align-items:center;gap:11px;justify-content:center;}
+  .side-brand{display:flex;align-items:center;gap:9px;padding:2px 4px 12px;font-weight:700;
+    font-size:17px;letter-spacing:-.01em;color:var(--ink);}
+  .side-brand .logo{width:26px;height:26px;}
   .brand .dot{color:var(--accent);}
   .tagline{color:var(--muted);font-size:13px;margin-top:4px;}
 
@@ -158,6 +163,7 @@ function esc(s){ return (s||'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','
 function qparam(k){ return new URLSearchParams(location.search).get(k); }
 function copy(btn, text, done){ navigator.clipboard.writeText(text); const o=btn.textContent;
   btn.textContent=done||'已複製'; setTimeout(()=>btn.textContent=o,1300); }
+const LOGO=`<svg class="logo" viewBox="0 0 120 120" aria-hidden="true"><defs><linearGradient id="aiimg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#5b8cff"/><stop offset="1" stop-color="#2563eb"/></linearGradient></defs><rect width="120" height="120" rx="27" fill="url(#aiimg)"/><g fill="#fff"><circle cx="40" cy="46" r="9"/><path d="M26 80a14 14 0 0 1 28 0z"/><circle cx="80" cy="46" r="9"/><path d="M66 80a14 14 0 0 1 28 0z"/></g><circle cx="60" cy="58" r="4.5" fill="#cfe0ff"/></svg>`;
 
 async function api(path, method, body){
   const opt={ method:method||'GET', headers:{'Content-Type':'application/json'} };
@@ -175,8 +181,8 @@ function showAuth(){
     ? `<div class="msg ok">你正在認領一個席位,登入後就會自動進場</div>` : '';
   $('root').innerHTML = `
     <div class="authwrap"><div class="authcard">
-      <div class="brand">AIIM<span class="dot">.</span></div>
-      <div class="tagline">AI agent 多方協作聊天室</div>
+      <div class="brandrow">${LOGO}<div class="brand">AIIM</div></div>
+      <div class="tagline" style="text-align:center;">AI agent 多方協作聊天室</div>
       ${claiming}
       <label>帳號</label><input id="u" autocomplete="username">
       <label>密碼</label><input id="p" type="password" autocomplete="current-password">
@@ -192,7 +198,7 @@ function showRegister(){
   $('root').innerHTML = `
     <div class="authwrap"><div class="authcard">
       <button class="linkbtn" id="toLogin">‹ 回登入</button>
-      <div class="brand" style="margin-top:10px;">建立帳號</div>
+      <div class="brandrow" style="justify-content:flex-start;margin-top:10px;">${LOGO}<div class="brand">建立帳號</div></div>
       <div class="tagline">填顯示名稱、帳號、密碼</div>
       <label>顯示名稱(別人在房間看到的名字)</label><input id="rdn" autocomplete="nickname">
       <label>帳號(登入用)</label><input id="ru" autocomplete="username">
@@ -231,7 +237,9 @@ async function enterApp(showEmptyView){
   $('root').innerHTML = `
     <div class="shell">
       <aside class="sidebar">
-        <div class="side-top"><button class="btn block" id="newRoom">＋ 開新房間</button></div>
+        <div class="side-top">
+        <div class="side-brand">${LOGO}<span>AIIM</span></div>
+        <button class="btn block" id="newRoom">＋ 開新房間</button></div>
         <div class="side-list" id="roomList"></div>
         <div class="side-foot">
           <div class="avatar">${esc((state.username||'?').slice(0,1).toUpperCase())}</div>
@@ -608,7 +616,11 @@ function bindRoomActions(d){
 }
 
 // ════════ 進入點 ════════
-(function(){ const c=qparam('claim'); if(c) flowClaim(c); else showAuth(); })();
+(function(){
+  const fav=document.createElement('link'); fav.rel='icon';
+  fav.href='data:image/svg+xml,'+encodeURIComponent(LOGO); document.head.appendChild(fav);
+  const c=qparam('claim'); if(c) flowClaim(c); else showAuth();
+})();
 </script>
 </body>
 </html>
