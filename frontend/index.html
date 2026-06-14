@@ -391,69 +391,15 @@ async function doClaim(token, displayName){
   }catch(e){ (($('claimmsg'))||$('pane')).innerHTML=`<div class="msg err">${esc(e.message)}</div>`; }
 }
 
-// 認領 Agent 席:網頁表單接入(平台代接)
+// 認領 Agent 席:就給 token 與設定 prompt(agent 自己連,不用選接法)
 function renderAttach(token, info){
   $('pane').innerHTML=`
-    <div class="h1">接入你的 Agent</div>
-    <div class="sub">把你自己、帶著你資料的 agent 連上來。平台只轉遞對話,看不到也不儲存你的資料。</div>
-    <label>Agent 在房間裡顯示的名字</label>
-    <input id="dn" value="${esc(state.username)}（Agent）">
-    <label>接法</label>
-    <select id="preset">
-      <option value="claude">用 Claude(只要 API 金鑰)</option>
-      <option value="openai">用 OpenAI(只要 API 金鑰)</option>
-      <option value="compat">我自架的 agent(貼上它的網址)</option>
-      <option value="custom">進階:自訂請求格式</option>
-    </select>
-    <div id="pf"></div>
-    <button class="btn" id="attachBtn" style="margin-top:16px;">接入 agent</button>
-    <div id="claimmsg"></div>`;
-  $('preset').onchange=renderPF; renderPF();
-  $('attachBtn').onclick=()=>doAttach(token);
-}
-const SYS_FIELD=`<label>指示 / 你的立場與資料(選填,讓它代表你)</label>
-  <textarea id="asys" placeholder="例如:你代表甲方。我方底價 100 萬、交期最晚 9 月、不接受獨家條款…"></textarea>`;
-function renderPF(){
-  const p=$('preset').value; let h='';
-  if(p==='claude') h=`<div class="msg ok">用 Claude 當這個 agent。要它帶你的資料/立場,貼進下面指示欄即可。</div>
-    <label>Claude API 金鑰</label><input id="akey" type="password" placeholder="sk-ant-...">
-    <label>模型(可留空)</label><input id="amodel" placeholder="claude-haiku-4-5-20251001">${SYS_FIELD}`;
-  else if(p==='openai') h=`<div class="msg ok">用 OpenAI 當這個 agent。要它帶你的資料/立場,貼進下面指示欄。</div>
-    <label>OpenAI API 金鑰</label><input id="akey" type="password" placeholder="sk-...">
-    <label>模型(可留空)</label><input id="amodel" placeholder="gpt-4o-mini">${SYS_FIELD}`;
-  else if(p==='compat') h=`<div class="msg ok">貼上你自架 agent 的網址(OpenAI 相容)。資料留你那邊,平台只轉對話。</div>
-    <label>你的 agent 網址</label><input id="curl" placeholder="https://你的服務/v1/chat/completions">
-    <label>金鑰(沒有可留空)</label><input id="akey" type="password" placeholder="sk-... 或留空">
-    <label>模型名稱(留空用預設)</label><input id="amodel" placeholder="gpt-4o-mini">${SYS_FIELD}`;
-  else if(p==='custom') h=`<div class="sub">格式不是 OpenAI 相容時用這個。</div>
-    <label>你的 agent 端點 URL</label><input id="curl" placeholder="https://你的服務/chat">
-    <label>表頭 Headers(JSON)</label><textarea id="cheaders" placeholder='{"Authorization":"Bearer ..."}'></textarea>
-    <label>請求範本 Body(JSON)</label><textarea id="cbody" placeholder='{"messages":[{"role":"user","content":""}]}'></textarea>
-    <label>把訊息塞進哪個欄位</label><input id="cmsgf" placeholder="messages.0.content">
-    <label>回覆藏在哪個欄位</label><input id="crepf" placeholder="choices.0.message.content">`;
-  $('pf').innerHTML=h;
-}
-function buildAgentCfg(){
-  const p=$('preset').value, sys=($('asys')?.value||'').trim();
-  const withSys=o=>(sys?{...o,system:sys}:o);
-  if(p==='claude') return withSys({preset:'claude',api_key:$('akey').value.trim(),model:$('amodel').value.trim()||'claude-haiku-4-5-20251001'});
-  if(p==='openai') return withSys({preset:'openai',api_key:$('akey').value.trim(),model:$('amodel').value.trim()||'gpt-4o-mini'});
-  if(p==='compat') return withSys({preset:'compat',url:$('curl').value.trim(),api_key:$('akey').value.trim(),model:$('amodel').value.trim()});
-  return {preset:'custom',request:{url:$('curl').value.trim(),method:'POST',
-    headers:JSON.parse($('cheaders').value||'{}'),body_template:JSON.parse($('cbody').value||'{}'),
-    message_field:$('cmsgf').value.trim()},response:{reply_field:$('crepf').value.trim()}};
-}
-async function doAttach(token){
-  $('claimmsg').innerHTML='<div class="msg ok">接入中…(會先測一次連線)</div>';
-  let agent; try{ agent=buildAgentCfg(); }
-  catch(e){ $('claimmsg').innerHTML=`<div class="msg err">設定格式有誤(JSON?):${esc(e.message)}</div>`; return; }
-  try{
-    const res=await api('/attach-agent','POST',{claim_token:token,display_name:$('dn').value.trim(),agent});
-    $('pane').innerHTML=`<div class="msg ok">${esc(res.msg)}</div>
-      <div class="sub" style="margin-top:10px;">你的 agent 已經在房間裡了,有人說話它就會自動回應。這頁可以關掉。</div>
-      <button class="btn ghost" id="back" style="margin-top:12px;">回我的房間</button>`;
-    $('back').onclick=showEmpty;
-  }catch(e){ $('claimmsg').innerHTML=`<div class="msg err">${esc(e.message)}</div>`; }
+    <div class="h1">${esc(info.room_name)}</div>
+    <div class="sub">這是一個 <b>Agent 席</b>。把下面的 token 或設定 prompt 交給你的 agent,它就會自己連進這間房。</div>
+    <div style="margin-top:14px;">${tokenBlock(info.bot_token||'')}</div>
+    <button class="btn ghost" id="back" style="margin-top:14px;">回我的房間</button>`;
+  bindManage();
+  $('back').onclick=showEmpty;
 }
 
 // ════════ 聊天室(在主區內,不砍外殼) ════════

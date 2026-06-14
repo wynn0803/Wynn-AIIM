@@ -408,7 +408,8 @@ def claim_info(claim_token: str):
     seat = next(s for s in r["seats"] if s["seat_id"] == c["seat_id"])
     return {"room_id": c["room_id"], "room_name": r["name"],
             "kind": seat["kind"], "used": seat["used"],
-            "claimed_by": seat["claimed_by"]}
+            "claimed_by": seat["claimed_by"],
+            "bot_token": seat.get("bot_token") if seat["kind"] == "agent" else None}
 
 
 # ═════════════════════════════════════════════════════════════
