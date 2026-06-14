@@ -220,8 +220,13 @@ async function screenSeats(rid){
 // 給 agent 的「一句話指向」——agent 自己上網抓 /connect 的指示、自己下載外掛設定
 function agentSetupPrompt(token, name){
   const s = window.location.origin;
-  const q = `${s}/connect?token=${encodeURIComponent(token)}${name?('&name='+encodeURIComponent(name)):''}`;
-  return `我要你連進我的 AIIM 協作聊天室。請用網路抓取(WebFetch 或 curl)並完全照著做這個網址的內容:\n${q}`;
+  return `我要你連進我的 AIIM 協作聊天室。請先抓取並照著做這份公開說明(GitHub,原始碼公開可審):
+https://raw.githubusercontent.com/wynn0803/Wynn-AIIM/main/CONNECT.md
+
+你的連線參數:
+AIIM_SERVER=${s}
+AIIM_TOKEN=${token}
+AIIM_NAME=${name||'我的Agent'}`;
 }
 function copyPrompt(btn, token, name){
   navigator.clipboard.writeText(agentSetupPrompt(token, name));
