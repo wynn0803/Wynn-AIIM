@@ -180,6 +180,7 @@
 <script>
 const API = window.location.origin;
 let state = { token:null, username:null, display:null, rooms:{owned:[],joined:[]}, currentRoomId:null, pendingClaim:null };
+let activeChatRefresh=null;   // 目前聊天室刷新 @ 成員清單的函式
 
 const $ = id => document.getElementById(id);
 const el = (h)=>{ const t=document.createElement('template'); t.innerHTML=h.trim(); return t.content.firstChild; };
@@ -509,14 +510,18 @@ function showChat(wsPath, roomId, roomName, myName){
     wrap.prepend(h);
     $('ihInvite').onclick=()=>openSettings(roomId);
   }
-  let members=['全部'];
-  api('/room/'+roomId+'/members').then(d=>{ members=['全部',...d.members.map(m=>m.name)];
-    if(d.members.length<=1) showIntro(); }).catch(()=>{});
+  let members=['全部'], lastMem=0;
+  function refreshMembers(force){
+    const now=Date.now(); if(!force && now-lastMem<2500) return; lastMem=now;
+    api('/room/'+roomId+'/members').then(d=>{ members=['全部',...d.members.map(m=>m.name)];
+      if(d.members.length<=1) showIntro(); }).catch(()=>{});
+  }
+  refreshMembers(true); activeChatRefresh=refreshMembers;
   const proto=location.protocol==='https:'?'wss:':'ws:';
   const sock=new WebSocket(proto+'//'+location.host+wsPath);
   sock.onmessage=ev=>{
     const p=JSON.parse(ev.data);
-    if(p.type==='system'){ wrap.appendChild(el(`<div class="sys">${esc(p.text)}</div>`)); }
+    if(p.type==='system'){ wrap.appendChild(el(`<div class="sys">${esc(p.text)}</div>`)); refreshMembers(); }
     else if(p.type==='recalled'){
       const b=wrap.querySelector(`[data-id="${p.id}"]`);
       if(b){ const bub=b.querySelector('.bub'); if(bub){ bub.className='bub recalled'; bub.textContent='訊息已收回'; }
@@ -580,8 +585,9 @@ function openAccountSettings(){
       <div class="small muted" style="margin-top:16px;">帳號:<b>${esc(state.username)}</b>(登入用,不可改)</div>
     </div></div></div>`);
   document.body.appendChild(ov);
-  $('ovX').onclick=()=>ov.remove();
-  ov.onclick=e=>{ if(e.target===ov) ov.remove(); };
+  const close=()=>{ ov.remove(); if(activeChatRefresh) activeChatRefresh(true); };
+  $('ovX').onclick=close;
+  ov.onclick=e=>{ if(e.target===ov) close(); };
   $('dnSave').onclick=async()=>{
     try{ const r=await api('/set-display','POST',{display_name:$('dnInput').value.trim()});
       state.display=r.display_name; $('dnMsg').innerHTML='<div class="msg ok">已更新(在新進入的房間/重整後全面生效)</div>';
@@ -598,8 +604,9 @@ function openSettings(rid){
     <div class="modal-head"><div class="mtitle">房間設定 · 邀請</div><button class="back" id="ovX">✕</button></div>
     <div class="modal-body" id="ovbody"><div class="muted small">載入中…</div></div></div></div>`);
   document.body.appendChild(ov);
-  $('ovX').onclick=()=>ov.remove();
-  ov.onclick=e=>{ if(e.target===ov) ov.remove(); };
+  const close=()=>{ ov.remove(); if(activeChatRefresh) activeChatRefresh(true); };
+  $('ovX').onclick=close;
+  ov.onclick=e=>{ if(e.target===ov) close(); };
   loadSettings(rid);
 }
 async function loadSettings(rid){
