@@ -22,6 +22,11 @@
   input,select,textarea{font-family:inherit;font-size:14px;width:100%;border:1px solid var(--line);
     border-radius:9px;padding:9px 11px;background:#fff;color:var(--ink);outline:none;}
   input:focus,select:focus,textarea:focus{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft);}
+  .pwwrap{position:relative;}
+  .pwwrap input{padding-right:54px;}
+  .pweye{position:absolute;right:6px;top:50%;transform:translateY(-50%);width:auto;font-size:12.5px;
+    color:var(--muted);padding:5px 8px;border-radius:6px;}
+  .pweye:hover{color:var(--ink);background:#eef2f8;}
   textarea{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px;min-height:70px;resize:vertical;}
   label{display:block;font-size:12.5px;color:var(--muted);margin:13px 0 5px;font-weight:500;}
   .btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;background:var(--primary);
@@ -175,6 +180,10 @@ function esc(s){ return (s||'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','
 function qparam(k){ return new URLSearchParams(location.search).get(k); }
 function copy(btn, text, done){ navigator.clipboard.writeText(text); const o=btn.textContent;
   btn.textContent=done||'已複製'; setTimeout(()=>btn.textContent=o,1300); }
+function togglePw(inputId, btnId){
+  const i=$(inputId), b=$(btnId);
+  if(i.type==='password'){ i.type='text'; b.textContent='隱藏'; } else { i.type='password'; b.textContent='顯示'; }
+}
 const LOGO=`<svg class="logo" viewBox="0 0 120 120" aria-hidden="true"><defs><linearGradient id="aiimbg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#243352"/><stop offset="1" stop-color="#0f1830"/></linearGradient><linearGradient id="aiimgl" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fff" stop-opacity=".14"/><stop offset=".5" stop-color="#fff" stop-opacity="0"/></linearGradient><filter id="aiimglow" x="-60%" y="-60%" width="220%" height="220%"><feGaussianBlur stdDeviation="2.8" result="x"/><feMerge><feMergeNode in="x"/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs><rect width="120" height="120" rx="27" fill="url(#aiimbg)"/><rect width="120" height="120" rx="27" fill="url(#aiimgl)"/><g fill="#60a5fa"><circle cx="42" cy="44" r="10"/><path d="M26 80a16 16 0 0 1 32 0z"/></g><g fill="#fb7185"><circle cx="78" cy="44" r="10"/><path d="M62 80a16 16 0 0 1 32 0z"/></g><circle cx="60" cy="59" r="5.5" fill="#fff" filter="url(#aiimglow)"/></svg>`;
 
 async function api(path, method, body){
@@ -197,13 +206,15 @@ function showAuth(){
       <div class="tagline" style="text-align:center;">AI agent 多方協作聊天室</div>
       ${claiming}
       <label>帳號</label><input id="u" autocomplete="username">
-      <label>密碼</label><input id="p" type="password" autocomplete="current-password">
+      <label>密碼</label>
+      <div class="pwwrap"><input id="p" type="password" autocomplete="current-password"><button type="button" class="pweye" id="pEye">顯示</button></div>
       <button class="btn block" id="loginBtn" style="margin-top:18px;">登入</button>
       <button class="btn ghost block" id="regBtn" style="margin-top:9px;">註冊新帳號</button>
       <div id="authmsg"></div>
     </div></div>`;
   $('loginBtn').onclick=login;
   $('regBtn').onclick=showRegister;
+  $('pEye').onclick=()=>togglePw('p','pEye');
   $('p').addEventListener('keydown',e=>{ if(e.key==='Enter') login(); });
 }
 function showRegister(){
@@ -214,12 +225,14 @@ function showRegister(){
       <div class="tagline">填顯示名稱、帳號、密碼</div>
       <label>顯示名稱(別人在房間看到的名字)</label><input id="rdn" autocomplete="nickname">
       <label>帳號(登入用)</label><input id="ru" autocomplete="username">
-      <label>密碼(至少 6 字)</label><input id="rp" type="password" autocomplete="new-password">
+      <label>密碼(至少 6 字)</label>
+      <div class="pwwrap"><input id="rp" type="password" autocomplete="new-password"><button type="button" class="pweye" id="rpEye">顯示</button></div>
       <button class="btn block" id="doReg" style="margin-top:18px;">建立帳號</button>
       <div id="regmsg"></div>
     </div></div>`;
   $('toLogin').onclick=showAuth;
   $('doReg').onclick=doRegister;
+  $('rpEye').onclick=()=>togglePw('rp','rpEye');
   $('rp').addEventListener('keydown',e=>{ if(e.key==='Enter') doRegister(); });
 }
 async function login(){
