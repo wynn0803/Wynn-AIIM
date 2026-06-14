@@ -86,6 +86,7 @@ def current_user(token):
 class AuthReq(BaseModel):
     username: str
     password: str
+    display_name: str = ""        # 顯示名稱(暱稱),登入不需要
 
 @app.post("/register")
 def register(req: AuthReq):
@@ -94,7 +95,8 @@ def register(req: AuthReq):
     if len(req.password) < 6:
         raise HTTPException(400, "密碼至少 6 個字")
     h, salt = hash_password(req.password)
-    USERS[req.username] = {"pw_hash": h, "salt": salt}
+    USERS[req.username] = {"pw_hash": h, "salt": salt,
+                           "display": (req.display_name or "").strip() or req.username}
     return {"ok": True, "msg": f"帳號 {req.username} 註冊成功"}
 
 @app.post("/login")
@@ -104,7 +106,8 @@ def login(req: AuthReq):
         raise HTTPException(401, "帳號或密碼錯誤")
     token = secrets.token_urlsafe(24)
     LOGIN_TOKENS[token] = req.username
-    return {"ok": True, "login_token": token, "username": req.username}
+    return {"ok": True, "login_token": token, "username": req.username,
+            "display_name": u.get("display", req.username)}
 
 
 # ═════════════════════════════════════════════════════════════
@@ -148,7 +151,8 @@ def create_room(req: CreateRoomReq, authorization: str = Header(None)):
     # 房主建房即入座(佔第一個真人席)→ 之後點房間直接回聊天,不必再認領
     h0 = next((s for s in seats if s["kind"] == "human"), None)
     if h0:
-        h0["used"] = True; h0["claimed_by"] = owner; h0["display_name"] = owner
+        h0["used"] = True; h0["claimed_by"] = owner
+        h0["display_name"] = USERS.get(owner, {}).get("display", owner)   # 房主用暱稱顯示
     ROOMS_DATA[rid] = {"name": req.name, "owner": owner, "seats": seats, "history": [],
                        "auto_left": req.auto_rounds,   # 初始就給預算 → agent 能先打招呼
                        "settings": {"max_turns": req.max_turns, "cost_budget": req.cost_budget,
