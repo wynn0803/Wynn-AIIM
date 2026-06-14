@@ -60,6 +60,14 @@
   .recallbtn:hover{background:#f1f4f9;color:var(--ink);}
   .bub.recalled{background:#eef1f6 !important;color:var(--faint);font-style:italic;}
   .me .bub.recalled{color:#cdd5e2;}
+  /* 首次空房提示 */
+  .introhint{align-self:center;max-width:420px;text-align:center;background:var(--panel);
+    border:1px solid var(--line);border-radius:14px;padding:22px 20px;margin:8px auto 4px;box-shadow:var(--shadow);}
+  .ih-emoji{font-size:30px;line-height:1;}
+  .ih-title{font-weight:600;font-size:15px;margin-top:8px;}
+  .ih-text{color:var(--muted);font-size:13px;margin-top:5px;}
+  .introhint .btn{margin-top:15px;}
+  .ih-tip{color:var(--faint);font-size:12px;margin-top:11px;}
   .msg{font-size:12.5px;padding:9px 11px;border-radius:8px;margin-top:10px;}
   .msg.ok{background:var(--ok-soft);color:var(--ok);}
   .msg.err{background:var(--err-soft);color:var(--err);}
@@ -480,7 +488,7 @@ function showChat(wsPath, roomId, roomName, myName){
   $('main').innerHTML=`
     <div class="topbar">
       <div class="ttl">${esc(roomName)}</div>
-      <button class="btn ghost sm" id="tbSet" title="設定 · 邀請">⚙ 設定</button>
+      <button class="btn ghost sm" id="tbSet" title="邀請別人/agent · 房間設定">⚙ 邀請/設定</button>
     </div>
     <div class="feed" id="feed"><div class="feedwrap" id="feedwrap"></div></div>
     <div class="composer">
@@ -490,8 +498,20 @@ function showChat(wsPath, roomId, roomName, myName){
         <button class="btn" id="send">送出</button></div></div>`;
   $('tbSet').onclick=()=>openSettings(roomId);
   const wrap=$('feedwrap'), feed=$('feed');
+  function showIntro(){
+    if(document.getElementById('introhint')) return;
+    const h=el(`<div class="introhint" id="introhint">
+      <div class="ih-emoji">👋</div>
+      <div class="ih-title">這個房間只有你</div>
+      <div class="ih-text">邀請真人,或把你的 agent 拉進來一起聊。</div>
+      <button class="btn" id="ihInvite">邀請真人 / 帶 agent 進來</button>
+      <div class="ih-tip">之後隨時可從右上角「⚙ 邀請/設定」邀請。</div></div>`);
+    wrap.prepend(h);
+    $('ihInvite').onclick=()=>openSettings(roomId);
+  }
   let members=['全部'];
-  api('/room/'+roomId+'/members').then(d=>{ members=['全部',...d.members.map(m=>m.name)]; }).catch(()=>{});
+  api('/room/'+roomId+'/members').then(d=>{ members=['全部',...d.members.map(m=>m.name)];
+    if(d.members.length<=1) showIntro(); }).catch(()=>{});
   const proto=location.protocol==='https:'?'wss:':'ws:';
   const sock=new WebSocket(proto+'//'+location.host+wsPath);
   sock.onmessage=ev=>{
