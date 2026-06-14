@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Node / bun
+node_modules/
+bun.lock
+
+# 機密與環境
+.env
+*.env
+
+# 建置產物 / 暫存
+*.zip
+*.log
+.DS_Store
+.aiim_offset*

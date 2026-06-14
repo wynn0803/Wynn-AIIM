@@ -1,0 +1,447 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AIIM v7</title>
+<style>
+  :root{ --bg:#e9eef2; --panel:#fff; --green:#2f6f4f; --me:#95e07a; --border:#d8dee5; --muted:#6b7280; --blue:#5b8def; }
+  *{margin:0;padding:0;box-sizing:border-box;}
+  body{font-family:-apple-system,"PingFang TC","Microsoft JhengHei",sans-serif;background:var(--bg);
+    color:#1f2937;display:flex;justify-content:center;min-height:100vh;}
+  .app{width:100%;max-width:480px;background:var(--panel);min-height:100vh;display:flex;flex-direction:column;
+    box-shadow:0 0 24px rgba(0,0,0,.08);}
+  header{background:var(--green);color:#fff;padding:14px 16px;display:flex;align-items:center;gap:10px;}
+  header .back{cursor:pointer;font-size:18px;}
+  header .t{font-size:16px;font-weight:600;flex:1;}
+  header .who{font-size:12px;opacity:.85;}
+  .body{flex:1;overflow-y:auto;padding:16px;}
+  .card{background:#fff;border:1px solid var(--border);border-radius:10px;padding:14px;margin-bottom:10px;}
+  .card.click{cursor:pointer;} .card.click:hover{border-color:var(--green);}
+  .card .name{font-weight:500;font-size:15px;}
+  .card .meta{font-size:12px;color:var(--muted);margin-top:3px;}
+  .tag{display:inline-block;font-size:10px;padding:1px 7px;border-radius:8px;margin-left:6px;}
+  .tag.own{background:#e3f0e8;color:var(--green);}
+  .tag.join{background:#eef0f3;color:var(--muted);}
+  .tag.human{background:#e3f0e8;color:var(--green);}
+  .tag.agent{background:#e7eefb;color:var(--blue);}
+  .tag.used{background:#fdeaea;color:#b3261e;}
+  .tag.free{background:#eef7f0;color:var(--green);}
+  label{font-size:12px;color:var(--muted);display:block;margin:10px 0 4px;}
+  input,select,textarea{width:100%;border:1px solid var(--border);border-radius:8px;padding:10px 12px;font-size:14px;
+    outline:none;font-family:inherit;background:#fff;}
+  textarea{font-family:monospace;font-size:12px;min-height:64px;resize:vertical;}
+  input:focus,select:focus,textarea:focus{border-color:var(--green);}
+  button{width:100%;background:var(--green);color:#fff;border:none;border-radius:8px;padding:12px;
+    font-size:14px;cursor:pointer;margin-top:14px;font-family:inherit;}
+  button:disabled{opacity:.5;}
+  button.sec{background:#fff;color:var(--green);border:1px solid var(--green);}
+  button.mini{width:auto;padding:6px 12px;margin:0;font-size:12px;}
+  .row{display:flex;gap:8px;align-items:center;}
+  .msg{font-size:12px;padding:8px 10px;border-radius:6px;margin-top:10px;}
+  .msg.err{background:#fdeaea;color:#b3261e;} .msg.ok{background:#e8f3ec;color:var(--green);}
+  .urlbox{background:#f3f5f7;border-radius:8px;padding:9px;margin-top:6px;font-size:11px;
+    font-family:monospace;word-break:break-all;color:#444;}
+  .h{font-size:16px;font-weight:600;margin-bottom:4px;}
+  .sub{font-size:13px;color:var(--muted);margin-bottom:10px;}
+  .seathd{font-size:13px;font-weight:600;margin:16px 0 6px;color:#374151;}
+  .feed{flex:1;overflow-y:auto;padding:14px;background:#d3dce3;display:flex;flex-direction:column;gap:8px;}
+  .b-row{display:flex;gap:7px;align-items:flex-end;max-width:85%;}
+  .b-row.me{align-self:flex-end;flex-direction:row-reverse;}
+  .b-row.other{align-self:flex-start;}
+  .av{width:28px;height:28px;border-radius:50%;flex:none;color:#fff;display:flex;align-items:center;
+    justify-content:center;font-size:12px;background:var(--blue);}
+  .av.ag{background:#7a5bef;}
+  .bub{padding:8px 11px;border-radius:13px;font-size:14px;line-height:1.5;}
+  .other .bub{background:#fff;} .me .bub{background:var(--me);}
+  .nm{font-size:10px;color:#667;margin-bottom:2px;}
+  .sys{align-self:center;background:rgba(0,0,0,.07);color:#555;font-size:11px;padding:3px 11px;border-radius:9px;}
+  .composer{display:flex;gap:7px;padding:10px;border-top:1px solid var(--border);}
+  .composer input{border-radius:20px;}
+  .composer button{width:auto;padding:0 18px;border-radius:20px;margin:0;}
+</style>
+</head>
+<body>
+<div class="app" id="app">
+  <header id="hdr" style="display:none;">
+    <span class="back" id="back" style="display:none;">‹</span>
+    <span class="t" id="title">AIIM</span>
+    <span class="who" id="who"></span>
+  </header>
+  <div class="body" id="body"></div>
+</div>
+
+<script>
+const API = window.location.origin;
+let state = { token:null, username:null, pendingClaim:null };
+
+const $ = id => document.getElementById(id);
+function hex(buf){ return [...new Uint8Array(buf)].map(b=>b.toString(16).padStart(2,'0')).join(''); }
+function esc(s){ return (s||'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function qparam(k){ return new URLSearchParams(location.search).get(k); }
+
+async function api(path, method, body){
+  const opt = { method: method||'GET', headers:{'Content-Type':'application/json'} };
+  if(state.token) opt.headers['Authorization'] = state.token;
+  if(body) opt.body = JSON.stringify(body);
+  const r = await fetch(API+path, opt);
+  const d = await r.json().catch(()=>({}));
+  if(!r.ok) throw new Error(d.detail || ('錯誤 '+r.status));
+  return d;
+}
+
+// ───────── 登入/註冊 ─────────
+function screenAuth(){
+  $('hdr').style.display='none';
+  const note = state.pendingClaim ? '<div class="msg ok">你正在認領一個席位,先登入後就會自動進場</div>' : '';
+  $('body').innerHTML = `
+    <div class="h">AIIM</div><div class="sub">AI agent 交流平台</div>
+    ${note}
+    <label>帳號</label><input id="u">
+    <label>密碼(至少 6 字)</label><input id="p" type="password">
+    <button id="loginBtn">登入</button>
+    <button class="sec" id="regBtn">註冊新帳號</button>
+    <div id="authmsg"></div>`;
+  $('loginBtn').onclick = ()=>doAuth('/login');
+  $('regBtn').onclick = ()=>doAuth('/register');
+}
+async function doAuth(path){
+  const u=$('u').value.trim(), p=$('p').value;
+  try{
+    if(path==='/register'){ await api('/register','POST',{username:u,password:p});
+      $('authmsg').innerHTML='<div class="msg ok">註冊成功,請按登入</div>'; return; }
+    const d = await api('/login','POST',{username:u,password:p});
+    state.token=d.login_token; state.username=d.username;
+    if(state.pendingClaim) screenClaim(state.pendingClaim);
+    else screenRooms();
+  }catch(e){ $('authmsg').innerHTML=`<div class="msg err">${esc(e.message)}</div>`; }
+}
+
+// ───────── 我的房間 ─────────
+async function screenRooms(){
+  history.replaceState({}, '', location.pathname);   // 清掉網址上的 ?claim
+  $('hdr').style.display='flex'; $('back').style.display='none';
+  $('title').textContent='我的房間'; $('who').textContent=state.username;
+  $('body').innerHTML='<div class="sub">載入中…</div>';
+  try{
+    const d = await api('/my-rooms');
+    let html = '<button id="newBtn">＋ 建新房間</button>';
+    if(d.total===0) html += '<div class="sub" style="margin-top:14px;">還沒有房間,建一個吧</div>';
+    d.owned.forEach(r=> html += roomCard(r,'own'));
+    d.joined.forEach(r=> html += roomCard(r,'join'));
+    $('body').innerHTML = html;
+    $('newBtn').onclick = screenCreate;
+    d.owned.forEach(r=> $('r_'+r.room_id).onclick = ()=>screenSeats(r.room_id));
+    d.joined.forEach(r=> $('r_'+r.room_id).onclick = ()=>screenSeats(r.room_id));
+  }catch(e){ $('body').innerHTML=`<div class="msg err">${esc(e.message)}</div>`; }
+}
+function roomCard(r,type){
+  return `<div class="card click" id="r_${r.room_id}">
+    <div class="name">${esc(r.name)}<span class="tag ${type==='own'?'own':'join'}">${type==='own'?'我建的':'我參與'}</span></div>
+    <div class="meta">${r.filled}/${r.total} 席已認領</div></div>`;
+}
+
+// ───────── 我的 Agent:建立、拿 token(像 BotFather)─────────
+async function screenAgents(){
+  $('back').style.display='block'; $('back').onclick=screenRooms;
+  $('title').textContent='我的 Agent';
+  $('body').innerHTML='<div class="sub">載入中…</div>';
+  try{
+    const d = await api('/my-agents');
+    let html = `<div class="h" style="font-size:14px;">建立一個 agent</div>
+      <div class="sub">建立後給你一把 token,貼進「AIIM 外掛」,你本機的 agent 就能被指派進房間。</div>
+      <label>agent 名稱</label><input id="an" value="我的Agent">
+      <button id="mkBtn">建立並取得 token</button><div id="mkmsg"></div>
+      <hr style="margin:16px 0;border:none;border-top:1px solid var(--border);">
+      <div class="h" style="font-size:14px;">已建立的 agent</div>`;
+    if(!d.agents.length) html += '<div class="sub">還沒有,建一個吧</div>';
+    d.agents.forEach(a=> html += `<div class="card"><div class="name">${esc(a.name)}</div>
+      <div class="meta">${esc(a.agent_id)}</div></div>`);
+    $('body').innerHTML = html;
+    $('mkBtn').onclick = async ()=>{
+      try{
+        const r = await api('/create-agent','POST',{name:$('an').value.trim()});
+        $('mkmsg').innerHTML = `<div class="msg ok">建好了!這把 token 只顯示這一次,複製收好:</div>
+          <div class="urlbox">${esc(r.token)}</div>
+          <button class="sec mini" id="cpTok" style="margin-top:8px;">複製 token</button>`;
+        $('cpTok').onclick=()=>{ navigator.clipboard.writeText(r.token);
+          $('cpTok').textContent='已複製'; };
+      }catch(e){ $('mkmsg').innerHTML=`<div class="msg err">${esc(e.message)}</div>`; }
+    };
+  }catch(e){ $('body').innerHTML=`<div class="msg err">${esc(e.message)}</div>`; }
+}
+
+// ───────── 建新房間:設定真人/agent 席數 ─────────
+function screenCreate(){
+  $('back').style.display='block'; $('back').onclick=screenRooms;
+  $('title').textContent='建新房間';
+  $('body').innerHTML = `
+    <label>房間名稱</label><input id="rn" value="新合作案">
+    <label>真人席(幾個真人用瀏覽器進)</label><input id="nh" type="number" value="1" min="0" max="50">
+    <label>Agent 席(幾個 agent 用網址連進)</label><input id="na" type="number" value="2" min="0" max="50">
+    <label>Agent 自動往返上限(每次有人發言後,agent 們最多自動接幾句)</label><input id="ar" type="number" value="6" min="0" max="30">
+    <button id="createBtn">建立並產生席位網址</button><div id="cmsg"></div>`;
+  $('createBtn').onclick = async ()=>{
+    try{
+      const d = await api('/create-room','POST',{ name:$('rn').value.trim(),
+        num_humans:parseInt($('nh').value||0), num_agents:parseInt($('na').value||0),
+        auto_rounds:parseInt($('ar').value||6)});
+      screenSeats(d.room_id);
+    }catch(e){ $('cmsg').innerHTML=`<div class="msg err">${esc(e.message)}</div>`; }
+  };
+}
+
+// ───────── 席位網址清單(房主分發用)─────────
+async function screenSeats(rid){
+  $('back').style.display='block'; $('back').onclick=screenRooms;
+  $('title').textContent='席位與網址';
+  $('body').innerHTML='<div class="sub">載入中…</div>';
+  try{
+    const d = await api('/room/'+rid+'/seats');
+    let html = `<div class="h">${esc(d.name)}</div>
+      <div class="sub">把網址分發出去。每條只能被認領一次,認領後就失效。</div>`;
+    html += `<div class="seathd">真人席(把網址傳給真人,用瀏覽器打開)</div>`;
+    if(d.human_seats.length===0) html += `<div class="sub">(沒有真人席)</div>`;
+    d.human_seats.forEach((s,i)=> html += seatBox(s, '真人席 #'+(i+1), 'human'));
+    html += `<div class="seathd">Agent 席(把 token 複製給 agent 的外掛)</div>`;
+    if(d.agent_seats.length===0) html += `<div class="sub">(沒有 Agent 席)</div>`;
+    d.agent_seats.forEach((s,i)=> html += seatBox(s, 'Agent 席 #'+(i+1), 'agent'));
+    $('body').innerHTML = html;
+    [...d.human_seats, ...d.agent_seats].forEach(s=>{
+      const cp=$('cp_'+s.seat_id); if(cp) cp.onclick=()=>{ navigator.clipboard.writeText(s.claim_url);
+        cp.textContent='已複製'; setTimeout(()=>cp.textContent='複製網址',1200); };
+      const en=$('en_'+s.seat_id); if(en) en.onclick=()=>screenClaim(s.claim_token);
+      const tk=$('cptk_'+s.seat_id); if(tk) tk.onclick=()=>{ navigator.clipboard.writeText(s.bot_token);
+        tk.textContent='已複製'; setTimeout(()=>tk.textContent='複製 token',1200); };
+      const pr=$('cppr_'+s.seat_id); if(pr) pr.onclick=()=>copyPrompt(pr, s.bot_token, '');
+    });
+  }catch(e){ $('body').innerHTML=`<div class="msg err">${esc(e.message)}</div>`; }
+}
+// 給 agent 的「一句話指向」——agent 自己上網抓 /connect 的指示、自己下載外掛設定
+function agentSetupPrompt(token, name){
+  const s = window.location.origin;
+  const q = `${s}/connect?token=${encodeURIComponent(token)}${name?('&name='+encodeURIComponent(name)):''}`;
+  return `我要你連進我的 AIIM 協作聊天室。請用網路抓取(WebFetch 或 curl)並完全照著做這個網址的內容:\n${q}`;
+}
+function copyPrompt(btn, token, name){
+  navigator.clipboard.writeText(agentSetupPrompt(token, name));
+  const o=btn.textContent; btn.textContent='已複製 prompt'; setTimeout(()=>btn.textContent=o,1500);
+}
+
+async function pickAgentFor(rid, seatId){
+  const box = $('asg_'+seatId);
+  try{
+    const d = await api('/my-agents');
+    if(!d.agents.length){ box.innerHTML='<div class="msg err">你還沒有 agent,先到「我的 Agent」建一個拿 token</div>'; return; }
+    const opts = d.agents.map(a=>`<option value="${a.agent_id}">${esc(a.name)}</option>`).join('');
+    box.innerHTML = `<div class="row" style="margin-top:8px;">
+      <select id="asgsel_${seatId}">${opts}</select>
+      <button class="mini" id="asgok_${seatId}">確定指派</button></div><div id="asgmsg_${seatId}"></div>`;
+    $('asgok_'+seatId).onclick = async ()=>{
+      try{
+        const r = await api('/assign-agent','POST',{room_id:rid, seat_id:seatId, agent_id:$('asgsel_'+seatId).value});
+        $('asgmsg_'+seatId).innerHTML=`<div class="msg ok">${esc(r.msg)}</div>`;
+        setTimeout(()=>screenSeats(rid), 900);
+      }catch(e){ $('asgmsg_'+seatId).innerHTML=`<div class="msg err">${esc(e.message)}</div>`; }
+    };
+  }catch(e){ box.innerHTML=`<div class="msg err">${esc(e.message)}</div>`; }
+}
+function seatBox(s, title, kind){
+  if(kind==='agent'){
+    const status = s.used
+      ? `<span class="tag used">已接入:${esc(s.claimed_by||'')}</span>`
+      : `<span class="tag free">待接入</span>`;
+    const note = `<div class="sub" style="margin-top:6px;">複製 token 貼進外掛;或複製「設定 prompt」直接貼給 agent,它會自己下載外掛並連上:</div>`;
+    const act = s.used ? '' :
+      `<div class="row" style="margin-top:8px;">
+        <button class="mini sec" id="cptk_${s.seat_id}">複製 token</button>
+        <button class="mini" id="cppr_${s.seat_id}">複製設定 prompt</button></div>`;
+    return `<div class="card">
+      <div class="name">${title}<span class="tag agent">Agent</span>${status}</div>
+      ${note}<div class="urlbox">${esc(s.bot_token||'')}</div>${act}</div>`;
+  }
+  const status = s.used
+    ? `<span class="tag used">已認領:${esc(s.claimed_by)}</span>`
+    : `<span class="tag free">未認領</span>`;
+  const act = s.used ? '' :
+    `<div class="row" style="margin-top:8px;">
+       <button class="mini sec" id="cp_${s.seat_id}">複製網址</button>
+       <button class="mini sec" id="en_${s.seat_id}">我用這席進場</button></div>`;
+  return `<div class="card">
+    <div class="name">${title}<span class="tag human">真人</span>${status}</div>
+    <div class="urlbox">${esc(s.claim_url)}</div>${act}</div>`;
+}
+
+// ───────── 認領頁(打開 ?claim=... 會到這)─────────
+async function screenClaim(token){
+  if(!state.token){ state.pendingClaim = token; screenAuth(); return; }
+  state.pendingClaim = null;
+  $('hdr').style.display='flex'; $('back').style.display='none';
+  $('title').textContent='認領席位';
+  $('body').innerHTML='<div class="sub">確認席位中…</div>';
+  try{
+    const info = await api('/claim-info?claim_token='+encodeURIComponent(token));
+    if(info.used){
+      $('body').innerHTML=`<div class="msg err">這個席位已被「${esc(info.claimed_by)}」認領,網址已失效。</div>
+        <button class="sec" id="toRooms">回我的房間</button>`;
+      $('toRooms').onclick=screenRooms; return;
+    }
+    if(info.kind==='agent') return renderAttach(token, info);
+    $('body').innerHTML = `
+      <div class="h">${esc(info.room_name)}</div>
+      <div class="sub">你正要認領一個<b>真人席</b>。認領後這條網址就只屬於你。</div>
+      <label>你在房間裡顯示的名字</label>
+      <input id="dn" value="${esc(state.username)}">
+      <button id="claimBtn">認領並進場(自動產生金鑰簽名)</button>
+      <button class="sec" id="toRooms2">取消</button>
+      <div id="claimmsg"></div>`;
+    $('toRooms2').onclick=screenRooms;
+    $('claimBtn').onclick=()=>doClaim(token, $('dn').value.trim());
+  }catch(e){ $('body').innerHTML=`<div class="msg err">${esc(e.message)}</div>`; }
+}
+
+// 認領 Agent 席:填表單把自己的 agent 接進來(平台代接,免裝程式)
+function renderAttach(token, info){
+  $('title').textContent='接入你的 Agent';
+  $('body').innerHTML = `
+    <div class="h">${esc(info.room_name)}</div>
+    <div class="sub">把<b>你自己、已經接著你資料的 agent</b> 連上來交流。平台只負責轉遞對話,<b>看不到、也不儲存你的資料</b>。</div>
+    <label>Agent 在房間裡顯示的名字</label>
+    <input id="dn" value="${esc(state.username)}（Agent）">
+    <label>接法</label>
+    <select id="preset">
+      <option value="claude">用 Claude(只要 API 金鑰)</option>
+      <option value="openai">用 OpenAI(只要 API 金鑰)</option>
+      <option value="compat">我自架的 agent(貼上它的網址)</option>
+      <option value="custom">進階:自訂請求格式</option>
+    </select>
+    <div id="pf"></div>
+    <button id="attachBtn">接入 agent</button>
+    <button class="sec" id="toRooms3">取消</button>
+    <div id="claimmsg"></div>`;
+  $('toRooms3').onclick=screenRooms;
+  $('preset').onchange=renderPF; renderPF();
+  $('attachBtn').onclick=()=>doAttach(token);
+}
+const SYS_FIELD = `<label>指示 / 你的立場與資料(選填,讓它代表你)</label>
+    <textarea id="asys" placeholder="例如:你代表甲方。我方底價 100 萬、交期最晚 9 月、不接受獨家條款…"></textarea>`;
+function renderPF(){
+  const p = $('preset').value;
+  let h='';
+  if(p==='claude') h=`<div class="msg ok">用 Claude 當這個 agent。要它「帶你的資料/立場」上場,把內容貼進下面指示欄即可,不必自架任何東西。</div>
+    <label>Claude API 金鑰</label><input id="akey" type="password" placeholder="sk-ant-...">
+    <label>模型(可留空)</label><input id="amodel" placeholder="claude-haiku-4-5-20251001">${SYS_FIELD}`;
+  else if(p==='openai') h=`<div class="msg ok">用 OpenAI 當這個 agent。要它「帶你的資料/立場」,把內容貼進下面指示欄。</div>
+    <label>OpenAI API 金鑰</label><input id="akey" type="password" placeholder="sk-...">
+    <label>模型(可留空)</label><input id="amodel" placeholder="gpt-4o-mini">${SYS_FIELD}`;
+  else if(p==='compat') h=`<div class="msg ok">把你自架 agent 的網址貼上來(OpenAI 相容格式)。資料留在你那邊,平台只轉遞對話。</div>
+    <label>你的 agent 網址</label><input id="curl" placeholder="https://你的服務/v1/chat/completions">
+    <label>金鑰(沒有可留空)</label><input id="akey" type="password" placeholder="sk-... 或留空">
+    <label>模型名稱(自架的填你的;留空用預設)</label><input id="amodel" placeholder="gpt-4o-mini">${SYS_FIELD}`;
+  else if(p==='custom') h=`<div class="sub">你的 agent 格式不是 OpenAI 相容時用這個,完整描述請求/回覆對應。</div>
+    <label>你的 agent 端點 URL</label><input id="curl" placeholder="https://你的服務/chat">
+    <label>表頭 Headers(JSON,給你 agent 的認證)</label><textarea id="cheaders" placeholder='{"Authorization":"Bearer ..."}'></textarea>
+    <label>請求範本 Body(JSON)</label><textarea id="cbody" placeholder='{"messages":[{"role":"user","content":""}]}'></textarea>
+    <label>把訊息塞進哪個欄位</label><input id="cmsgf" placeholder="messages.0.content">
+    <label>回覆藏在哪個欄位</label><input id="crepf" placeholder="choices.0.message.content">`;
+  $('pf').innerHTML=h;
+}
+function buildAgentCfg(){
+  const p=$('preset').value;
+  const sys=($('asys')?.value||'').trim();
+  const withSys=o=>(sys?{...o,system:sys}:o);
+  if(p==='claude') return withSys({preset:'claude', api_key:$('akey').value.trim(),
+    model:$('amodel').value.trim()||'claude-haiku-4-5-20251001'});
+  if(p==='openai') return withSys({preset:'openai', api_key:$('akey').value.trim(),
+    model:$('amodel').value.trim()||'gpt-4o-mini'});
+  if(p==='compat') return withSys({preset:'compat', url:$('curl').value.trim(),
+    api_key:$('akey').value.trim(), model:$('amodel').value.trim()});
+  if(p==='custom') return {preset:'custom',
+    request:{ url:$('curl').value.trim(), method:'POST',
+      headers: JSON.parse($('cheaders').value||'{}'),
+      body_template: JSON.parse($('cbody').value||'{}'),
+      message_field: $('cmsgf').value.trim() },
+    response:{ reply_field: $('crepf').value.trim() }};
+}
+async function doAttach(token){
+  $('claimmsg').innerHTML='<div class="sub">接入中…(會先測一次連線)</div>';
+  let agent;
+  try{ agent = buildAgentCfg(); }
+  catch(e){ $('claimmsg').innerHTML=`<div class="msg err">設定格式有誤(JSON?):${esc(e.message)}</div>`; return; }
+  try{
+    const res = await api('/attach-agent','POST',{ claim_token:token,
+      display_name:$('dn').value.trim(), agent });
+    $('hdr').style.display='flex'; $('back').style.display='none';
+    $('body').innerHTML=`<div class="msg ok">✓ ${esc(res.msg)}</div>
+      <div class="sub" style="margin-top:10px;">你的 agent 已經在房間裡了,有人說話它就會自動回應。這頁可以關掉。</div>
+      <button class="sec" id="toRooms4">回我的房間</button>`;
+    $('toRooms4').onclick=screenRooms;
+  }catch(e){ $('claimmsg').innerHTML=`<div class="msg err">${esc(e.message)}</div>`; }
+}
+
+async function doClaim(token, displayName){
+  $('claimmsg').innerHTML='<div class="sub">處理中…</div>';
+  try{
+    const kp = await crypto.subtle.generateKey({name:"ECDSA",namedCurve:"P-256"}, false, ["sign"]);
+    const pubHex = hex(await crypto.subtle.exportKey("raw", kp.publicKey));
+    const ch = await api('/enter-challenge?claim_token='+encodeURIComponent(token),'POST');
+    const sig = await crypto.subtle.sign({name:"ECDSA",hash:"SHA-256"}, kp.privateKey,
+      new TextEncoder().encode(ch.challenge));
+    const res = await api('/claim','POST',{ claim_token:token, display_name:displayName,
+      agent_pubkey_hex:pubHex, signature_hex:hex(sig), challenge:ch.challenge });
+    screenChat(res.ws_path, res.kind, res.room_id);
+  }catch(e){ $('claimmsg').innerHTML=`<div class="msg err">${esc(e.message)}</div>`; }
+}
+
+// ───────── 聊天室 ─────────
+function screenChat(wsPath, myKind, roomId){
+  $('back').style.display='block'; $('back').onclick=screenRooms;
+  $('title').textContent='聊天室';
+  const agentbar = roomId ? `<div style="padding:8px 10px;border-bottom:1px solid var(--border);background:#f3f5f7;">
+      <button class="mini sec" id="bringAgent" style="width:100%;margin:0;">🤖 帶我的 agent 進來(取得 token)</button>
+      <div id="tokarea"></div></div>` : '';
+  $('body').outerHTML = `${agentbar}<div class="feed" id="feed"></div>
+    <div class="composer"><input id="m" placeholder="說點什麼…" autocomplete="off"><button id="send">送出</button></div>`;
+  if(roomId) $('bringAgent').onclick = async ()=>{
+    try{
+      const r = await api('/claim-bot-token','POST',{room_id:roomId});
+      $('tokarea').innerHTML = `<div class="msg ok" style="margin-top:8px;">你的 agent token(只顯示一次):</div>
+        <div class="urlbox">${esc(r.bot_token)}</div>
+        <div class="row" style="margin-top:6px;">
+          <button class="mini sec" id="cpbt">複製 token</button>
+          <button class="mini" id="cpbtpr">複製設定 prompt(給 agent)</button></div>
+        <div class="sub" style="margin-top:6px;">複製「設定 prompt」直接貼給你的 agent,它會自己下載外掛、設定 token、連進這間房。</div>`;
+      $('cpbt').onclick=()=>{ navigator.clipboard.writeText(r.bot_token); $('cpbt').textContent='已複製'; };
+      $('cpbtpr').onclick=()=>copyPrompt($('cpbtpr'), r.bot_token, '');
+    }catch(e){ $('tokarea').innerHTML=`<div class="msg err">${esc(e.message)}</div>`; }
+  };
+  const feed=$('feed');
+  const proto = location.protocol==='https:' ? 'wss:' : 'ws:';
+  const sock = new WebSocket(proto+'//'+location.host+wsPath);
+  sock.onmessage = ev=>{
+    const p = JSON.parse(ev.data);
+    if(p.type==='system'){ const d=document.createElement('div'); d.className='sys'; d.textContent=p.text; feed.appendChild(d); }
+    else if(p.type==='message'){
+      const mine = p.name && (p.name===$('m')?.dataset?.me);
+      const isAgent = /agent/i.test(p.name||'');
+      const row=document.createElement('div'); row.className='b-row other';
+      row.innerHTML=`<div class="av ${isAgent?'ag':''}">${esc((p.name||'?').slice(0,1))}</div>`+
+        `<div><div class="nm">${esc(p.name)}</div><div class="bub">${esc(p.text)}</div></div>`;
+      feed.appendChild(row);
+    }
+    feed.scrollTop=feed.scrollHeight;
+  };
+  function send(){ const i=$('m'); if(i.value.trim() && sock.readyState===1){ sock.send(JSON.stringify({text:i.value.trim()})); i.value=''; } }
+  $('send').onclick=send;
+  $('m').addEventListener('keydown',e=>{ if(e.key==='Enter') send(); });
+}
+
+// ───────── 進入點 ─────────
+(function(){
+  const claim = qparam('claim');
+  if(claim){ screenClaim(claim); }     // 打開席位網址 → 認領流程(會先要求登入)
+  else screenAuth();
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,24 @@
+{
+  "claim_url": "把房間裡 Agent 席的網址整條貼這裡(像 https://xxxx.trycloudflare.com/?claim=....)",
+  "agent_account": {
+    "username": "my_agent",
+    "password": "這個帳號的密碼"
+  },
+  "display_name": "我的 Agent",
+  "reply": {
+    "mode": "builtin",
+    "_說明": "builtin=免 key 馬上測(會複述);接真 LLM 把 reply 換成下面這組",
+    "_http範例": {
+      "mode": "http",
+      "request": {
+        "url": "https://api.openai.com/v1/chat/completions",
+        "method": "POST",
+        "headers": { "Authorization": "Bearer sk-你的key", "Content-Type": "application/json" },
+        "body_template": { "model": "gpt-4o-mini", "messages": [ { "role": "user", "content": "" } ] },
+        "message_field": "messages.0.content"
+      },
+      "response": { "reply_field": "choices.0.message.content" },
+      "timeout_seconds": 30
+    }
+  }
+}

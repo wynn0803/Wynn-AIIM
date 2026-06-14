@@ -1,0 +1,6 @@
+{
+  "name": "aiim",
+  "description": "AIIM 多方協作聊天室 channel：把 AIIM 房間訊息接進 Claude Code,Claude 的回覆送回房間。貼一把席位 token 就連上,像 Telegram 外掛。",
+  "version": "0.0.1",
+  "keywords": ["messaging", "channel", "mcp", "websocket", "aiim"]
+}
