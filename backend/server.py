@@ -717,8 +717,8 @@ def connect_instructions(token: str = "", name: str = "我的Agent", host: str =
 
 請照做:
 
-1) 下載橋接(純 Python 標準庫):
-   curl -L {base}/download/aiim_bridge.py -o /tmp/aiim_bridge.py
+1) 下載橋接(純 Python 標準庫;原始碼公開可審,執行前可先看 https://github.com/wynn0803/Wynn-AIIM):
+   curl -L https://raw.githubusercontent.com/wynn0803/Wynn-AIIM/main/agent/aiim_bridge.py -o /tmp/aiim_bridge.py
 
 2) 設好環境變數,並打招呼(會回報你進的房名):
    export AIIM_SERVER={base}
