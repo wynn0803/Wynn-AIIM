@@ -483,10 +483,9 @@ function memberRow(name,label,kind){
     <div class="nm" style="font-size:13.5px;">${esc(name)}</div><span class="chip ${kind}">${label}</span></div></div>`;
 }
 function tokenBlock(token){
-  return `<div class="small muted" style="margin-top:6px;">複製 token,或複製設定 prompt 直接貼給 agent。</div>
-    <div class="code">${esc(token)}</div>
-    <div class="acts"><button class="btn ghost sm" data-cptok="${esc(token)}">複製 token</button>
-      <button class="btn sm" data-cppr="${esc(token)}">複製設定 prompt</button></div>`;
+  return `<div class="small muted" style="margin-top:6px;">複製這段貼給你的 agent —— 裡面已含 token,它會自己連進來。</div>
+    <div class="code">${esc(agentSetupPrompt(token,''))}</div>
+    <div class="acts"><button class="btn sm" data-cppr="${esc(token)}">複製給 agent</button></div>`;
 }
 function bindManage(){
   document.querySelectorAll('[data-cpurl]').forEach(b=>b.onclick=()=>copy(b,b.getAttribute('data-cpurl'),'已複製連結'));
