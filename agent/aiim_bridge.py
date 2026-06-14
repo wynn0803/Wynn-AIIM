@@ -55,7 +55,10 @@ def hello():
     print(f"connected to room: {d['room_name']} as {NAME}")
 
 
-def recv(timeout=120):
+def recv(timeout=None):
+    # 長等(預設約 9 分鐘,貼近 Claude Code bash 上限)→ 待機時很少醒來,幾乎不耗 token
+    if timeout is None:
+        timeout = int(os.environ.get("AIIM_RECV_TIMEOUT", "540"))
     end = time.time() + timeout
     while time.time() < end:
         d = _post("/agent/poll", {"since": _offset(), "name": NAME})
@@ -64,7 +67,7 @@ def recv(timeout=120):
             for m in d["messages"]:
                 print(f"{m['name']}: {m['text']}")
             return
-        time.sleep(1.5)
+        time.sleep(3)
     print("(no new message — recv again to keep waiting)")
 
 

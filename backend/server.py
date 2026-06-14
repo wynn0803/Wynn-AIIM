@@ -266,7 +266,8 @@ def reenter_room(req: ReenterReq, authorization: str = Header(None)):
     session = secrets.token_urlsafe(24)
     SESSIONS[session] = {"room_id": req.room_id, "seat_id": seat["seat_id"],
                          "display_name": seat["display_name"] or me}
-    return {"ok": True, "ws_path": f"/ws/{session}", "room_name": r["name"]}
+    return {"ok": True, "ws_path": f"/ws/{session}", "room_name": r["name"],
+            "display_name": seat["display_name"] or me}
 
 class RenameReq(BaseModel):
     room_id: str
@@ -405,7 +406,7 @@ async def agent_say_http(req: AgentSayReq, x_agent_token: str = Header(None)):
         if room.get("auto_left", 0) <= 0:
             return {"ok": False, "dropped": True, "note": "等真人發言後才能再說"}
         room["auto_left"] = room.get("auto_left", 0) - 1
-    msg = {"type": "message", "name": name, "text": req.text,
+    msg = {"type": "message", "id": secrets.token_hex(6), "name": name, "text": req.text,
            "time": datetime.now().strftime("%m-%d %H:%M")}
     room["history"].append(msg)
     await broadcast(bt["room_id"], msg)
@@ -577,6 +578,7 @@ def claim(req: ClaimReq, authorization: str = Header(None)):
     RECONNECT[reconnect] = dict(payload)
     return {"ok": True, "msg": f"{req.display_name} 已認領 {seat['kind']} 席位並進場",
             "kind": seat["kind"], "room_id": c["room_id"],
+            "room_name": ROOMS_DATA[c["room_id"]]["name"], "display_name": req.display_name,
             "session_token": session, "reconnect_token": reconnect,
             "ws_path": f"/ws/{session}"}
 
@@ -701,7 +703,7 @@ def build_context(room_id, limit=12):
     return "\n".join(f'{m["name"]}: {m["text"]}' for m in hist)
 
 async def agent_say(room_id, name, text):
-    msg = {"type": "message", "name": name, "text": text,
+    msg = {"type": "message", "id": secrets.token_hex(6), "name": name, "text": text,
            "time": datetime.now().strftime("%m-%d %H:%M")}
     ROOMS_DATA[room_id]["history"].append(msg)
     await broadcast(room_id, msg)
@@ -756,6 +758,8 @@ async def ws(websocket: WebSocket, session_token: str):
     await websocket.accept()
     WS_ROOMS.setdefault(rid, []).append(websocket)
     for past in ROOMS_DATA[rid]["history"]:
+        if past.get("recalled"):                       # 已收回的不補送給後進的人
+            continue
         await websocket.send_text(json.dumps(past, ensure_ascii=False))
     await broadcast(rid, {"type": "system", "text": f"{name} 已連線"})
     try:
@@ -763,6 +767,14 @@ async def ws(websocket: WebSocket, session_token: str):
             raw = await websocket.receive_text()
             data = json.loads(raw)
             room = ROOMS_DATA[rid]
+            if data.get("type") == "recall":           # 收回自己發的訊息
+                mid = data.get("id")
+                for m in room["history"]:
+                    if m.get("id") == mid and m.get("name") == name:
+                        m["recalled"] = True; m["text"] = ""
+                        await broadcast(rid, {"type": "recalled", "id": mid})
+                        break
+                continue
             settings = room["settings"]
             msg_count = sum(1 for m in room["history"] if m.get("type") == "message")
             if msg_count >= settings["max_turns"]:
@@ -779,7 +791,7 @@ async def ws(websocket: WebSocket, session_token: str):
                     room["auto_left"] = room.get("auto_left", 0) - 1
             else:
                 room["auto_left"] = settings.get("auto_rounds", 6)
-            msg = {"type": "message", "name": name, "text": data.get("text", ""),
+            msg = {"type": "message", "id": secrets.token_hex(6), "name": name, "text": data.get("text", ""),
                    "time": datetime.now().strftime("%m-%d %H:%M")}
             room["history"].append(msg)
             await broadcast(rid, msg)

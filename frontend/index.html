@@ -45,6 +45,16 @@
     border-radius:10px;box-shadow:var(--shadow);overflow:hidden;}
   .mention-item{padding:8px 12px;font-size:13.5px;cursor:pointer;}
   .mention-item:hover{background:var(--accent-soft);}
+  /* 收回 */
+  .bubrow{display:flex;align-items:center;gap:6px;}
+  .me .bubrow{flex-direction:row-reverse;}
+  .me .nm2{text-align:right;}
+  .recallbtn{opacity:0;border:1px solid var(--line);background:#fff;color:var(--muted);width:24px;height:24px;
+    border-radius:7px;font-size:13px;line-height:1;transition:opacity .12s, background .12s;flex:none;}
+  .brow:hover .recallbtn{opacity:1;}
+  .recallbtn:hover{background:#f1f4f9;color:var(--ink);}
+  .bub.recalled{background:#eef1f6 !important;color:var(--faint);font-style:italic;}
+  .me .bub.recalled{color:#cdd5e2;}
   .msg{font-size:12.5px;padding:9px 11px;border-radius:8px;margin-top:10px;}
   .msg.ok{background:var(--ok-soft);color:var(--ok);}
   .msg.err{background:var(--err-soft);color:var(--err);}
@@ -327,7 +337,7 @@ async function showRoom(rid){
   const meta=[...state.rooms.owned,...state.rooms.joined].find(r=>r.room_id===rid);
   mainView(meta?esc(meta.name):'房間', showEmpty, `<div class="muted small">載入中…</div>`);
   try{ const re=await api('/reenter','POST',{room_id:rid});      // 已有席位 → 沿用,直接回對話
-    return showChat(re.ws_path, rid, re.room_name||(meta?meta.name:'聊天室')); }
+    return showChat(re.ws_path, rid, re.room_name||(meta?meta.name:'聊天室'), re.display_name); }
   catch(_){ /* 沒席位 → 落到下面的進場/管理頁 */ }
   if(meta && !meta.is_owner){ return renderParticipantRoom(rid, meta); }
   try{
@@ -432,7 +442,7 @@ async function doClaim(token, displayName){
     const res=await api('/claim','POST',{ claim_token:token, display_name:displayName,
       agent_pubkey_hex:pubHex, signature_hex:hex(sig), challenge:ch.challenge });
     await loadRooms();
-    showChat(res.ws_path, res.room_id, res.room_name||'聊天室');
+    showChat(res.ws_path, res.room_id, res.room_name||'聊天室', res.display_name);
   }catch(e){ (($('claimmsg'))||$('pane')).innerHTML=`<div class="msg err">${esc(e.message)}</div>`; }
 }
 
@@ -448,8 +458,9 @@ function renderAttach(token, info){
 }
 
 // ════════ 聊天室(在主區內,不砍外殼) ════════
-function showChat(wsPath, roomId, roomName){
+function showChat(wsPath, roomId, roomName, myName){
   state.currentRoomId=roomId; renderRoomList();
+  myName=myName||state.display||state.username;
   $('main').innerHTML=`
     <div class="topbar">
       <div class="ttl">${esc(roomName)}</div>
@@ -459,7 +470,7 @@ function showChat(wsPath, roomId, roomName){
     <div class="composer">
       <div id="mentionPop" class="mention-pop" style="display:none;"></div>
       <div class="inwrap">
-        <textarea id="m" rows="1" placeholder="說點什麼…(打 @ 提及某人,@全部 提醒所有人)"></textarea>
+        <textarea id="m" rows="1" placeholder="說點什麼…(連按兩次 Enter 送出 · @ 提及某人)"></textarea>
         <button class="btn" id="send">送出</button></div></div>`;
   $('tbSet').onclick=()=>openSettings(roomId);
   const wrap=$('feedwrap'), feed=$('feed');
@@ -470,15 +481,24 @@ function showChat(wsPath, roomId, roomName){
   sock.onmessage=ev=>{
     const p=JSON.parse(ev.data);
     if(p.type==='system'){ wrap.appendChild(el(`<div class="sys">${esc(p.text)}</div>`)); }
+    else if(p.type==='recalled'){
+      const b=wrap.querySelector(`[data-id="${p.id}"]`);
+      if(b){ const bub=b.querySelector('.bub'); if(bub){ bub.className='bub recalled'; bub.textContent='訊息已收回'; }
+        const rc=b.querySelector('.recallbtn'); if(rc) rc.remove(); }
+    }
     else if(p.type==='message'){
-      const isAgent=/agent/i.test(p.name||'');
-      wrap.appendChild(el(`<div class="brow other">
-        <div class="av ${isAgent?'ag':''}">${esc((p.name||'?').slice(0,1))}</div>
-        <div class="bwrap"><div class="nm2">${esc(p.name)}</div><div class="bub">${renderText(p.text)}</div></div></div>`));
+      const mine=(p.name===myName), isAgent=/agent/i.test(p.name||'');
+      const rb = mine && p.id ? `<button class="recallbtn" data-rid="${p.id}" title="收回">↩</button>` : '';
+      wrap.appendChild(el(`<div class="brow ${mine?'me':'other'}" ${p.id?`data-id="${p.id}"`:''}>
+        <div class="av ${mine?'me':(isAgent?'ag':'')}">${esc((p.name||'?').slice(0,1))}</div>
+        <div class="bwrap"><div class="nm2">${esc(p.name)}</div>
+          <div class="bubrow"><div class="bub">${renderText(p.text)}</div>${rb}</div></div></div>`));
+      const rbe=wrap.querySelector(`[data-rid="${p.id}"]`);
+      if(rbe) rbe.onclick=()=>{ if(sock.readyState===1) sock.send(JSON.stringify({type:'recall',id:p.id})); };
     }
     feed.scrollTop=feed.scrollHeight;
   };
-  const ta=$('m'), pop=$('mentionPop');
+  const ta=$('m'), pop=$('mentionPop'); let lastEnter=0;
   function hidePop(){ pop.style.display='none'; pop.dataset.open=''; }
   function curQuery(){ const m=ta.value.slice(0,ta.selectionStart).match(/@([^\s@]*)$/); return m?m[1]:null; }
   function showPop(){
@@ -501,7 +521,11 @@ function showChat(wsPath, roomId, roomName){
     if(pop.dataset.open==='1' && (e.key==='Enter'||e.key==='Tab')){ e.preventDefault();
       const f=pop.querySelector('[data-mn]'); if(f) insertMention(f.getAttribute('data-mn')); return; }
     if(e.key==='Escape') return hidePop();
-    if(e.key==='Enter'&&!e.shiftKey){ e.preventDefault(); send(); }
+    if(e.key==='Enter'&&!e.shiftKey){
+      const now=Date.now();
+      if(now-lastEnter<700){ e.preventDefault(); lastEnter=0; ta.value=ta.value.replace(/\n+$/,''); send(); }
+      else lastEnter=now;     // 第一次 Enter 換行;700ms 內再按一次才送出
+    }
   });
   ta.addEventListener('input',()=>{ ta.style.height='42px'; ta.style.height=Math.min(ta.scrollHeight,160)+'px'; showPop(); });
   ta.addEventListener('blur',()=>setTimeout(hidePop,150));
