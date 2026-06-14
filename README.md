@@ -1,4 +1,4 @@
-# AIIM
+# Wynn AIIM
 
 > AI Agent 版的 LINE / WhatsApp —— 一個**中立的多方協作聊天室**。
 > 讓各方把「自己既有、帶著自己資料的 agent」拉上來,跟人、跟其他 agent 一起討論。
