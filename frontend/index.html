@@ -71,7 +71,7 @@
   .main{flex:1;display:flex;flex-direction:column;min-width:0;}
   .topbar{height:56px;flex:none;border-bottom:1px solid var(--line);display:flex;align-items:center;
     gap:10px;padding:0 18px;}
-  .topbar .ttl{font-size:15px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .topbar .ttl{flex:1;font-size:15px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
   .topbar .back{width:30px;height:30px;border-radius:8px;display:flex;align-items:center;justify-content:center;
     font-size:18px;color:var(--muted);}
   .topbar .back:hover{background:#f1f2f4;color:var(--ink);}
@@ -117,6 +117,17 @@
     border-radius:12px;padding:10px 13px;}
   .agentbar{max-width:760px;margin:0 auto 6px;}
   .inline-tools{display:flex;justify-content:flex-end;max-width:760px;margin:0 auto 8px;}
+  /* 設定 modal */
+  .overlay{position:fixed;inset:0;background:rgba(15,17,21,.4);display:flex;align-items:center;
+    justify-content:center;z-index:50;padding:20px;}
+  .modal{width:100%;max-width:460px;max-height:84vh;background:#fff;border-radius:16px;display:flex;
+    flex-direction:column;box-shadow:0 16px 48px rgba(0,0,0,.25);overflow:hidden;}
+  .modal-head{display:flex;align-items:center;padding:14px 18px;border-bottom:1px solid var(--line);}
+  .modal-head .mtitle{flex:1;font-weight:600;font-size:15px;}
+  .modal-head .back{width:30px;height:30px;border-radius:8px;display:flex;align-items:center;
+    justify-content:center;font-size:15px;color:var(--muted);}
+  .modal-head .back:hover{background:#f1f2f4;color:var(--ink);}
+  .modal-body{padding:16px 18px;overflow-y:auto;}
 </style>
 </head>
 <body>
@@ -270,6 +281,9 @@ async function showRoom(rid){
   state.currentRoomId=rid; renderRoomList();
   const meta=[...state.rooms.owned,...state.rooms.joined].find(r=>r.room_id===rid);
   mainView(meta?esc(meta.name):'房間', showEmpty, `<div class="muted small">載入中…</div>`);
+  try{ const re=await api('/reenter','POST',{room_id:rid});      // 已有席位 → 沿用,直接回對話
+    return showChat(re.ws_path, rid, re.room_name||(meta?meta.name:'聊天室')); }
+  catch(_){ /* 沒席位 → 落到下面的進場/管理頁 */ }
   if(meta && !meta.is_owner){ return renderParticipantRoom(rid, meta); }
   try{
     const d=await api('/room/'+rid+'/seats');
@@ -447,17 +461,14 @@ function showChat(wsPath, roomId, roomName){
   state.currentRoomId=roomId; renderRoomList();
   $('main').innerHTML=`
     <div class="topbar">
-      <button class="back" id="tbBack">‹</button>
       <div class="ttl">${esc(roomName)}</div>
+      <button class="back" id="tbSet" title="設定 · 邀請">⚙</button>
     </div>
-    <div class="inline-tools"><button class="btn ghost sm" id="bringAgent" style="margin-top:10px;">＋ 帶我的 agent 進來</button></div>
-    <div class="agentbar" id="tokarea"></div>
     <div class="feed" id="feed"><div class="feedwrap" id="feedwrap"></div></div>
     <div class="composer"><div class="inwrap">
       <textarea id="m" rows="1" placeholder="說點什麼…"></textarea>
       <button class="btn" id="send">送出</button></div></div>`;
-  $('tbBack').onclick=()=> roomId?showRoom(roomId):showEmpty();
-  $('bringAgent').onclick=()=>bringAgent(roomId);
+  $('tbSet').onclick=()=>openSettings(roomId);
   const wrap=$('feedwrap'), feed=$('feed');
   const proto=location.protocol==='https:'?'wss:':'ws:';
   const sock=new WebSocket(proto+'//'+location.host+wsPath);
@@ -478,18 +489,63 @@ function showChat(wsPath, roomId, roomName){
   ta.addEventListener('keydown',e=>{ if(e.key==='Enter'&&!e.shiftKey){ e.preventDefault(); send(); } });
   ta.addEventListener('input',()=>{ ta.style.height='42px'; ta.style.height=Math.min(ta.scrollHeight,160)+'px'; });
 }
-async function bringAgent(roomId){
+// 房內右上角 ⚙ → 設定 / 邀請(學 Slack/ChatGPT:進房後才邀人)
+function openSettings(rid){
+  const ov=el(`<div class="overlay" id="ov"><div class="modal">
+    <div class="modal-head"><div class="mtitle">房間設定 · 邀請</div><button class="back" id="ovX">✕</button></div>
+    <div class="modal-body" id="ovbody"><div class="muted small">載入中…</div></div></div></div>`);
+  document.body.appendChild(ov);
+  $('ovX').onclick=()=>ov.remove();
+  ov.onclick=e=>{ if(e.target===ov) ov.remove(); };
+  loadSettings(rid);
+}
+async function loadSettings(rid){
   try{
-    const r=await api('/claim-bot-token','POST',{room_id:roomId});
-    $('tokarea').innerHTML=`<div class="card">
-      <div class="small muted">你的 agent token(只顯示一次)。複製設定 prompt 貼給 agent,它會自己連進這間房:</div>
-      <div class="code">${esc(r.bot_token)}</div>
-      <div class="acts">
-        <button class="btn ghost sm" id="cpbt">複製 token</button>
-        <button class="btn sm" id="cpbtpr">複製設定 prompt</button></div></div>`;
-    $('cpbt').onclick=()=>copy($('cpbt'),r.bot_token,'已複製');
-    $('cpbtpr').onclick=()=>copy($('cpbtpr'),agentSetupPrompt(r.bot_token,''),'已複製 prompt');
-  }catch(e){ $('tokarea').innerHTML=`<div class="msg err">${esc(e.message)}</div>`; }
+    const d=await api('/room/'+rid+'/seats');          // 房主:成員 / 邀請真人 / 帶 agent
+    $('ovbody').innerHTML=renderManage(d); bindManage();
+  }catch(e){                                            // 成員:只給「帶我的 agent 進來」
+    $('ovbody').innerHTML=`<div class="h2" style="margin-top:0;">帶我的 agent 進來</div>
+      <div class="small muted">取一把 token 貼給你的 agent,它就連進這間房。</div>
+      <button class="btn" id="memBring" style="margin-top:10px;">取得 agent token</button><div id="memArea"></div>`;
+    $('memBring').onclick=async()=>{
+      try{ const r=await api('/claim-bot-token','POST',{room_id:rid});
+        $('memArea').innerHTML=tokenBlock(r.bot_token); bindManage();
+      }catch(err){ $('memArea').innerHTML=`<div class="msg err">${esc(err.message)}</div>`; }
+    };
+  }
+}
+function renderManage(d){
+  const cmH=d.human_seats.filter(s=>s.used), cmA=d.agent_seats.filter(s=>s.used);
+  const frH=d.human_seats.filter(s=>!s.used), frA=d.agent_seats.filter(s=>!s.used);
+  let h=`<div class="h2" style="margin-top:0;">成員(${cmH.length+cmA.length})</div>`;
+  if(!cmH.length && !cmA.length) h+=`<div class="small muted">還沒有人</div>`;
+  cmH.forEach(s=>h+=memberRow(s.claimed_by,'真人','human'));
+  cmA.forEach(s=>h+=memberRow(s.claimed_by||'Agent','Agent','agent'));
+  h+=`<div class="h2">邀請真人(把連結傳給對方)</div>`;
+  if(!frH.length) h+=`<div class="small muted">真人席已滿</div>`;
+  frH.forEach((s,i)=>h+=`<div class="card"><div class="top"><div class="nm">真人席 #${cmH.length+i+1}</div><span class="chip free">空</span></div>
+    <div class="code">${esc(s.claim_url)}</div>
+    <div class="acts"><button class="btn ghost sm" data-cpurl="${esc(s.claim_url)}">複製連結</button></div></div>`);
+  h+=`<div class="h2">帶 agent 進來</div>`;
+  if(!frA.length) h+=`<div class="small muted">Agent 席已滿</div>`;
+  frA.forEach((s,i)=>h+=`<div class="card"><div class="top"><div class="nm">Agent 席 #${cmA.length+i+1}</div><span class="chip free">空</span></div>${tokenBlock(s.bot_token)}</div>`);
+  return h;
+}
+function memberRow(name,label,kind){
+  return `<div class="card" style="padding:9px 12px;margin-bottom:7px;"><div class="top">
+    <div class="av ${kind==='agent'?'ag':''}" style="width:26px;height:26px;font-size:11px;">${esc((name||'?').slice(0,1))}</div>
+    <div class="nm" style="font-size:13.5px;">${esc(name)}</div><span class="chip ${kind}">${label}</span></div></div>`;
+}
+function tokenBlock(token){
+  return `<div class="small muted" style="margin-top:6px;">複製 token,或複製設定 prompt 直接貼給 agent。</div>
+    <div class="code">${esc(token)}</div>
+    <div class="acts"><button class="btn ghost sm" data-cptok="${esc(token)}">複製 token</button>
+      <button class="btn sm" data-cppr="${esc(token)}">複製設定 prompt</button></div>`;
+}
+function bindManage(){
+  document.querySelectorAll('[data-cpurl]').forEach(b=>b.onclick=()=>copy(b,b.getAttribute('data-cpurl'),'已複製連結'));
+  document.querySelectorAll('[data-cptok]').forEach(b=>b.onclick=()=>copy(b,b.getAttribute('data-cptok'),'已複製'));
+  document.querySelectorAll('[data-cppr]').forEach(b=>b.onclick=()=>copy(b,agentSetupPrompt(b.getAttribute('data-cppr'),''),'已複製 prompt'));
 }
 
 // ════════ 進入點 ════════

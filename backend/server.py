@@ -145,6 +145,10 @@ def create_room(req: CreateRoomReq, authorization: str = Header(None)):
         CLAIM[s["claim_token"]] = {"room_id": rid, "seat_id": s["seat_id"]}
         if s["kind"] == "agent":          # 每個 Agent 席當場登記一把 token
             BOT_TOKENS[_hash_token(s["bot_token"])] = {"room_id": rid, "seat_id": s["seat_id"]}
+    # 房主建房即入座(佔第一個真人席)→ 之後點房間直接回聊天,不必再認領
+    h0 = next((s for s in seats if s["kind"] == "human"), None)
+    if h0:
+        h0["used"] = True; h0["claimed_by"] = owner; h0["display_name"] = owner
     ROOMS_DATA[rid] = {"name": req.name, "owner": owner, "seats": seats, "history": [],
                        "auto_left": req.auto_rounds,   # 初始就給預算 → agent 能先打招呼
                        "settings": {"max_turns": req.max_turns, "cost_budget": req.cost_budget,
@@ -241,6 +245,24 @@ def claim_bot_token(req: ClaimBotReq, authorization: str = Header(None)):
     seat["claimed_by"] = f"{me} 的 agent"
     return {"ok": True, "seat_id": seat["seat_id"], "bot_token": seat["bot_token"],
             "msg": "這把 token 只顯示一次,複製貼進你的 AIIM 外掛"}
+
+class ReenterReq(BaseModel):
+    room_id: str
+
+@app.post("/reenter")
+def reenter_room(req: ReenterReq, authorization: str = Header(None)):
+    """已在房內有席位的人重新進聊天:沿用原席位,不佔新位。"""
+    me = current_user(authorization)
+    r = ROOMS_DATA.get(req.room_id)
+    if not r:
+        raise HTTPException(404, "找不到房間")
+    seat = next((s for s in r["seats"] if s["kind"] == "human" and s["claimed_by"] == me), None)
+    if not seat:
+        raise HTTPException(404, "你在這間房還沒有席位")
+    session = secrets.token_urlsafe(24)
+    SESSIONS[session] = {"room_id": req.room_id, "seat_id": seat["seat_id"],
+                         "display_name": seat["display_name"] or me}
+    return {"ok": True, "ws_path": f"/ws/{session}", "room_name": r["name"]}
 
 # 純 HTTP 收發(給零依賴橋接用:agent 用 token 輪詢收訊、發言)
 class AgentPollReq(BaseModel):
