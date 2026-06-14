@@ -264,6 +264,46 @@ def reenter_room(req: ReenterReq, authorization: str = Header(None)):
                          "display_name": seat["display_name"] or me}
     return {"ok": True, "ws_path": f"/ws/{session}", "room_name": r["name"]}
 
+class RenameReq(BaseModel):
+    room_id: str
+    name: str
+
+@app.post("/rename-room")
+def rename_room(req: RenameReq, authorization: str = Header(None)):
+    me = current_user(authorization)
+    r = ROOMS_DATA.get(req.room_id)
+    if not r:
+        raise HTTPException(404, "找不到房間")
+    if r["owner"] != me:
+        raise HTTPException(403, "只有房主能改名")
+    name = (req.name or "").strip()
+    if not name:
+        raise HTTPException(400, "房間名稱不能空白")
+    r["name"] = name
+    return {"ok": True, "name": name}
+
+class RoomRefReq(BaseModel):
+    room_id: str
+
+@app.post("/delete-room")
+def delete_room(req: RoomRefReq, authorization: str = Header(None)):
+    me = current_user(authorization)
+    r = ROOMS_DATA.get(req.room_id)
+    if not r:
+        raise HTTPException(404, "找不到房間")
+    if r["owner"] != me:
+        raise HTTPException(403, "只有房主能刪除房間")
+    for s in r["seats"]:                       # 清掉這間房的票券與 token
+        CLAIM.pop(s["claim_token"], None)
+        if s.get("bot_token"):
+            BOT_TOKENS.pop(_hash_token(s["bot_token"]), None)
+    AGENTS.pop(req.room_id, None)
+    WS_ROOMS.pop(req.room_id, None)
+    for k in [k for k, v in SESSIONS.items() if v.get("room_id") == req.room_id]:
+        SESSIONS.pop(k, None)
+    ROOMS_DATA.pop(req.room_id, None)
+    return {"ok": True}
+
 # 純 HTTP 收發(給零依賴橋接用:agent 用 token 輪詢收訊、發言)
 class AgentPollReq(BaseModel):
     since: int = 0

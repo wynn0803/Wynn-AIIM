@@ -31,6 +31,8 @@
   .btn.ghost{background:#fff;color:var(--ink);border:1px solid var(--line);}
   .btn.ghost:hover{background:#fafafa;border-color:#d8dade;}
   .btn.sm{padding:6px 11px;font-size:12.5px;border-radius:8px;}
+  .btn.danger{background:#fff;color:var(--err);border:1px solid #f0c9c6;}
+  .btn.danger:hover{background:var(--err-soft);}
   .msg{font-size:12.5px;padding:9px 11px;border-radius:8px;margin-top:10px;}
   .msg.ok{background:var(--ok-soft);color:var(--ok);}
   .msg.err{background:var(--err-soft);color:var(--err);}
@@ -408,7 +410,7 @@ function showChat(wsPath, roomId, roomName){
   $('main').innerHTML=`
     <div class="topbar">
       <div class="ttl">${esc(roomName)}</div>
-      <button class="back" id="tbSet" title="設定 · 邀請">⚙</button>
+      <button class="btn ghost sm" id="tbSet" title="設定 · 邀請">⚙ 設定</button>
     </div>
     <div class="feed" id="feed"><div class="feedwrap" id="feedwrap"></div></div>
     <div class="composer"><div class="inwrap">
@@ -448,7 +450,7 @@ function openSettings(rid){
 async function loadSettings(rid){
   try{
     const d=await api('/room/'+rid+'/seats');          // 房主:成員 / 邀請真人 / 帶 agent
-    $('ovbody').innerHTML=renderManage(d); bindManage();
+    $('ovbody').innerHTML=renderManage(d); bindManage(); bindRoomActions(d);
   }catch(e){                                            // 成員:只給「帶我的 agent 進來」
     $('ovbody').innerHTML=`<div class="h2" style="margin-top:0;">帶我的 agent 進來</div>
       <div class="small muted">取一把 token 貼給你的 agent,它就連進這間房。</div>
@@ -463,7 +465,10 @@ async function loadSettings(rid){
 function renderManage(d){
   const cmH=d.human_seats.filter(s=>s.used), cmA=d.agent_seats.filter(s=>s.used);
   const frH=d.human_seats.filter(s=>!s.used), frA=d.agent_seats.filter(s=>!s.used);
-  let h=`<div class="h2" style="margin-top:0;">成員(${cmH.length+cmA.length})</div>`;
+  let h=`<div class="card" style="padding:12px 14px;"><label style="margin-top:0;">房間名稱</label>
+    <div class="row" style="gap:8px;"><input id="rnInput" value="${esc(d.name)}" style="flex:1;"><button class="btn sm" id="rnSave">儲存</button></div>
+    <div id="rnMsg"></div></div>`;
+  h+=`<div class="h2" style="margin-top:18px;">成員(${cmH.length+cmA.length})</div>`;
   if(!cmH.length && !cmA.length) h+=`<div class="small muted">還沒有人</div>`;
   cmH.forEach(s=>h+=memberRow(s.claimed_by,'真人','human'));
   cmA.forEach(s=>h+=memberRow(s.claimed_by||'Agent','Agent','agent'));
@@ -475,6 +480,8 @@ function renderManage(d){
   h+=`<div class="h2">帶 agent 進來</div>`;
   if(!frA.length) h+=`<div class="small muted">Agent 席已滿</div>`;
   frA.forEach((s,i)=>h+=`<div class="card"><div class="top"><div class="nm">Agent 席 #${cmA.length+i+1}</div><span class="chip free">空</span></div>${tokenBlock(s.bot_token)}</div>`);
+  h+=`<div style="margin-top:24px;border-top:1px solid var(--line);padding-top:14px;">
+    <button class="btn danger sm" id="delRoom">刪除房間</button><div id="delMsg"></div></div>`;
   return h;
 }
 function memberRow(name,label,kind){
@@ -491,6 +498,22 @@ function bindManage(){
   document.querySelectorAll('[data-cpurl]').forEach(b=>b.onclick=()=>copy(b,b.getAttribute('data-cpurl'),'已複製連結'));
   document.querySelectorAll('[data-cptok]').forEach(b=>b.onclick=()=>copy(b,b.getAttribute('data-cptok'),'已複製'));
   document.querySelectorAll('[data-cppr]').forEach(b=>b.onclick=()=>copy(b,agentSetupPrompt(b.getAttribute('data-cppr'),''),'已複製 prompt'));
+}
+function bindRoomActions(d){
+  const rid=d.room_id;
+  const sv=$('rnSave'); if(sv) sv.onclick=async()=>{
+    const name=$('rnInput').value.trim();
+    try{ await api('/rename-room','POST',{room_id:rid,name}); await loadRooms();
+      $('rnMsg').innerHTML='<div class="msg ok">已更名</div>';
+      const t=document.querySelector('.topbar .ttl'); if(t && state.currentRoomId===rid) t.textContent=name;
+    }catch(e){ $('rnMsg').innerHTML=`<div class="msg err">${esc(e.message)}</div>`; }
+  };
+  const del=$('delRoom'); if(del) del.onclick=async()=>{
+    if(del.dataset.c!=='1'){ del.dataset.c='1'; del.textContent='確定刪除?再按一次'; return; }
+    try{ await api('/delete-room','POST',{room_id:rid});
+      const ov=$('ov'); if(ov) ov.remove(); await loadRooms(); showEmpty();
+    }catch(e){ $('delMsg').innerHTML=`<div class="msg err">${esc(e.message)}</div>`; }
+  };
 }
 
 // ════════ 進入點 ════════
