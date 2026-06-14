@@ -34,6 +34,13 @@
   .btn.sm{padding:6px 11px;font-size:12.5px;border-radius:8px;}
   .btn.danger{background:#fff;color:var(--err);border:1px solid #f0c9c6;}
   .btn.danger:hover{background:var(--err-soft);}
+  /* @ 提及 */
+  .mention{color:var(--accent);font-weight:600;}
+  .me .bub .mention{color:#d8e6ff;}
+  .mention-pop{max-width:760px;margin:0 auto 8px;background:#fff;border:1px solid var(--line);
+    border-radius:10px;box-shadow:var(--shadow);overflow:hidden;}
+  .mention-item{padding:8px 12px;font-size:13.5px;cursor:pointer;}
+  .mention-item:hover{background:var(--accent-soft);}
   .msg{font-size:12.5px;padding:9px 11px;border-radius:8px;margin-top:10px;}
   .msg.ok{background:var(--ok-soft);color:var(--ok);}
   .msg.err{background:var(--err-soft);color:var(--err);}
@@ -414,11 +421,15 @@ function showChat(wsPath, roomId, roomName){
       <button class="btn ghost sm" id="tbSet" title="設定 · 邀請">⚙ 設定</button>
     </div>
     <div class="feed" id="feed"><div class="feedwrap" id="feedwrap"></div></div>
-    <div class="composer"><div class="inwrap">
-      <textarea id="m" rows="1" placeholder="說點什麼…"></textarea>
-      <button class="btn" id="send">送出</button></div></div>`;
+    <div class="composer">
+      <div id="mentionPop" class="mention-pop" style="display:none;"></div>
+      <div class="inwrap">
+        <textarea id="m" rows="1" placeholder="說點什麼…(打 @ 提及某人,@全部 提醒所有人)"></textarea>
+        <button class="btn" id="send">送出</button></div></div>`;
   $('tbSet').onclick=()=>openSettings(roomId);
   const wrap=$('feedwrap'), feed=$('feed');
+  let members=['全部'];
+  api('/room/'+roomId+'/members').then(d=>{ members=['全部',...d.members.map(m=>m.name)]; }).catch(()=>{});
   const proto=location.protocol==='https:'?'wss:':'ws:';
   const sock=new WebSocket(proto+'//'+location.host+wsPath);
   sock.onmessage=ev=>{
@@ -428,15 +439,40 @@ function showChat(wsPath, roomId, roomName){
       const isAgent=/agent/i.test(p.name||'');
       wrap.appendChild(el(`<div class="brow other">
         <div class="av ${isAgent?'ag':''}">${esc((p.name||'?').slice(0,1))}</div>
-        <div class="bwrap"><div class="nm2">${esc(p.name)}</div><div class="bub">${esc(p.text)}</div></div></div>`));
+        <div class="bwrap"><div class="nm2">${esc(p.name)}</div><div class="bub">${renderText(p.text)}</div></div></div>`));
     }
     feed.scrollTop=feed.scrollHeight;
   };
-  const ta=$('m');
-  function send(){ const v=ta.value.trim(); if(v && sock.readyState===1){ sock.send(JSON.stringify({text:v})); ta.value=''; ta.style.height='42px'; } }
+  const ta=$('m'), pop=$('mentionPop');
+  function hidePop(){ pop.style.display='none'; pop.dataset.open=''; }
+  function curQuery(){ const m=ta.value.slice(0,ta.selectionStart).match(/@([^\s@]*)$/); return m?m[1]:null; }
+  function showPop(){
+    const q=curQuery();
+    if(q===null) return hidePop();
+    const list=members.filter(n=>n.toLowerCase().includes(q.toLowerCase())).slice(0,6);
+    if(!list.length) return hidePop();
+    pop.innerHTML=list.map(n=>`<div class="mention-item" data-mn="${esc(n)}">@${esc(n)}</div>`).join('');
+    pop.style.display='block'; pop.dataset.open='1';
+    pop.querySelectorAll('[data-mn]').forEach(it=>it.onclick=()=>insertMention(it.getAttribute('data-mn')));
+  }
+  function insertMention(name){
+    const start=ta.selectionStart, after=ta.value.slice(start);
+    const nb=ta.value.slice(0,start).replace(/@([^\s@]*)$/, '@'+name+' ');
+    ta.value=nb+after; ta.setSelectionRange(nb.length,nb.length); ta.focus(); hidePop();
+  }
+  function send(){ const v=ta.value.trim(); if(v && sock.readyState===1){ sock.send(JSON.stringify({text:v})); ta.value=''; ta.style.height='42px'; hidePop(); } }
   $('send').onclick=send;
-  ta.addEventListener('keydown',e=>{ if(e.key==='Enter'&&!e.shiftKey){ e.preventDefault(); send(); } });
-  ta.addEventListener('input',()=>{ ta.style.height='42px'; ta.style.height=Math.min(ta.scrollHeight,160)+'px'; });
+  ta.addEventListener('keydown',e=>{
+    if(pop.dataset.open==='1' && (e.key==='Enter'||e.key==='Tab')){ e.preventDefault();
+      const f=pop.querySelector('[data-mn]'); if(f) insertMention(f.getAttribute('data-mn')); return; }
+    if(e.key==='Escape') return hidePop();
+    if(e.key==='Enter'&&!e.shiftKey){ e.preventDefault(); send(); }
+  });
+  ta.addEventListener('input',()=>{ ta.style.height='42px'; ta.style.height=Math.min(ta.scrollHeight,160)+'px'; showPop(); });
+  ta.addEventListener('blur',()=>setTimeout(hidePop,150));
+}
+function renderText(t){
+  return esc(t).replace(/(^|[\s(])@([^\s@,，。!！?？]+)/g, (m,p,n)=>`${p}<span class="mention">@${n}</span>`);
 }
 // 房內右上角 ⚙ → 設定 / 邀請(學 Slack/ChatGPT:進房後才邀人)
 function openSettings(rid){
@@ -469,10 +505,15 @@ function renderManage(d){
   let h=`<div class="card" style="padding:12px 14px;"><label style="margin-top:0;">房間名稱</label>
     <div class="row" style="gap:8px;"><input id="rnInput" value="${esc(d.name)}" style="flex:1;"><button class="btn sm" id="rnSave">儲存</button></div>
     <div id="rnMsg"></div></div>`;
+  h+=`<div class="card" style="padding:12px 14px;"><label style="margin-top:0;">Agent 互傳訊息上限(每次有人發言後)</label>
+    <div class="row" style="gap:8px;">
+      <input id="arInput" type="number" min="0" max="200" value="${d.auto_rounds<0?'':d.auto_rounds}" style="flex:1;" ${d.auto_rounds<0?'disabled':''}>
+      <label style="margin:0;display:flex;align-items:center;gap:5px;white-space:nowrap;font-size:13px;color:var(--ink);"><input type="checkbox" id="arInf" style="width:auto;" ${d.auto_rounds<0?'checked':''}>無限</label>
+      <button class="btn sm" id="arSave">儲存</button></div><div id="arMsg"></div></div>`;
   h+=`<div class="h2" style="margin-top:18px;">成員(${cmH.length+cmA.length})</div>`;
   if(!cmH.length && !cmA.length) h+=`<div class="small muted">還沒有人</div>`;
   cmH.forEach(s=>h+=memberRow(s.claimed_by,'真人','human'));
-  cmA.forEach(s=>h+=memberRow(s.claimed_by||'Agent','Agent','agent'));
+  cmA.forEach(s=>h+=agentMemberRow(s));
   h+=`<div class="h2">邀請真人(把連結傳給對方)</div>`;
   if(!frH.length) h+=`<div class="small muted">真人席已滿</div>`;
   frH.forEach((s,i)=>h+=`<div class="card"><div class="top"><div class="nm">真人席 #${cmH.length+i+1}</div><span class="chip free">空</span></div>
@@ -489,6 +530,14 @@ function memberRow(name,label,kind){
   return `<div class="card" style="padding:9px 12px;margin-bottom:7px;"><div class="top">
     <div class="av ${kind==='agent'?'ag':''}" style="width:26px;height:26px;font-size:11px;">${esc((name||'?').slice(0,1))}</div>
     <div class="nm" style="font-size:13.5px;">${esc(name)}</div><span class="chip ${kind}">${label}</span></div></div>`;
+}
+function agentMemberRow(s){
+  const nm=s.display_name||s.claimed_by||'Agent';
+  return `<div class="card" style="padding:9px 12px;margin-bottom:7px;"><div class="top">
+    <div class="av ag" style="width:26px;height:26px;font-size:11px;">${esc(nm.slice(0,1))}</div>
+    <input data-anseat="${s.seat_id}" value="${esc(nm)}" style="flex:1;font-size:13.5px;padding:5px 9px;">
+    <button class="btn ghost sm" data-ansave="${s.seat_id}">改名</button>
+    <span class="chip agent">Agent</span></div></div>`;
 }
 function tokenBlock(token){
   return `<div class="small muted" style="margin-top:6px;">複製這段貼給你的 agent —— 裡面已含 token,它會自己連進來。</div>
@@ -515,6 +564,20 @@ function bindRoomActions(d){
       const ov=$('ov'); if(ov) ov.remove(); await loadRooms(); showEmpty();
     }catch(e){ $('delMsg').innerHTML=`<div class="msg err">${esc(e.message)}</div>`; }
   };
+  const arInf=$('arInf'), arInput=$('arInput'), arSave=$('arSave');
+  if(arInf) arInf.onchange=()=>{ arInput.disabled=arInf.checked; };
+  if(arSave) arSave.onclick=async()=>{
+    const val=(arInf&&arInf.checked)?-1:parseInt(arInput.value||0);
+    try{ await api('/set-auto-rounds','POST',{room_id:rid,auto_rounds:val});
+      $('arMsg').innerHTML='<div class="msg ok">已更新'+(val<0?'(無限)':'')+'</div>';
+    }catch(e){ $('arMsg').innerHTML=`<div class="msg err">${esc(e.message)}</div>`; }
+  };
+  document.querySelectorAll('[data-ansave]').forEach(b=>b.onclick=async()=>{
+    const sid=b.getAttribute('data-ansave'), inp=document.querySelector(`[data-anseat="${sid}"]`);
+    try{ await api('/rename-agent','POST',{room_id:rid,seat_id:sid,name:inp.value.trim()});
+      b.textContent='已改'; setTimeout(()=>b.textContent='改名',1200); await loadRooms();
+    }catch(e){ b.textContent='失敗'; setTimeout(()=>b.textContent='改名',1500); }
+  });
 }
 
 // ════════ 進入點 ════════

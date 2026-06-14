@@ -304,6 +304,61 @@ def delete_room(req: RoomRefReq, authorization: str = Header(None)):
     ROOMS_DATA.pop(req.room_id, None)
     return {"ok": True}
 
+class RenameAgentReq(BaseModel):
+    room_id: str
+    seat_id: str
+    name: str
+
+@app.post("/rename-agent")
+def rename_agent(req: RenameAgentReq, authorization: str = Header(None)):
+    """房主隨時替某個 agent 席改顯示名。"""
+    me = current_user(authorization)
+    r = ROOMS_DATA.get(req.room_id)
+    if not r:
+        raise HTTPException(404, "找不到房間")
+    if r["owner"] != me:
+        raise HTTPException(403, "只有房主能改 agent 名")
+    seat = next((s for s in r["seats"] if s["seat_id"] == req.seat_id and s["kind"] == "agent"), None)
+    if not seat:
+        raise HTTPException(404, "找不到這個 Agent 席")
+    name = (req.name or "").strip()
+    if not name:
+        raise HTTPException(400, "名稱不能空白")
+    seat["display_name"] = name
+    if seat.get("claimed_by"):
+        seat["claimed_by"] = name
+    return {"ok": True, "name": name}
+
+class AutoRoundsReq(BaseModel):
+    room_id: str
+    auto_rounds: int            # -1 = 無限
+
+@app.post("/set-auto-rounds")
+def set_auto_rounds(req: AutoRoundsReq, authorization: str = Header(None)):
+    me = current_user(authorization)
+    r = ROOMS_DATA.get(req.room_id)
+    if not r:
+        raise HTTPException(404, "找不到房間")
+    if r["owner"] != me:
+        raise HTTPException(403, "只有房主能改設定")
+    r["settings"]["auto_rounds"] = req.auto_rounds
+    if req.auto_rounds >= 0:
+        r["auto_left"] = req.auto_rounds
+    return {"ok": True, "auto_rounds": req.auto_rounds}
+
+@app.get("/room/{room_id}/members")
+def room_members(room_id: str, authorization: str = Header(None)):
+    """房內成員(給 @ 提及用)。任何成員可取。"""
+    me = current_user(authorization)
+    r = ROOMS_DATA.get(room_id)
+    if not r:
+        raise HTTPException(404, "找不到房間")
+    if r["owner"] != me and not any(s["claimed_by"] == me for s in r["seats"]):
+        raise HTTPException(403, "你不在這間房")
+    out = [{"name": s["display_name"] or s["claimed_by"], "kind": s["kind"]}
+           for s in r["seats"] if s["used"] and (s["display_name"] or s["claimed_by"])]
+    return {"members": out}
+
 # 純 HTTP 收發(給零依賴橋接用:agent 用 token 輪詢收訊、發言)
 class AgentPollReq(BaseModel):
     since: int = 0
@@ -320,9 +375,10 @@ def agent_poll(req: AgentPollReq, x_agent_token: str = Header(None)):
     seat = next((s for s in room["seats"] if s["seat_id"] == bt["seat_id"]), None)
     if seat and not seat["used"]:
         seat["used"] = True; seat["claimed_by"] = req.name; seat["display_name"] = req.name
+    self_name = (seat.get("display_name") if seat else None) or req.name   # 以席位現名為準(被改名也對)
     hist = [m for m in room["history"] if m.get("type") == "message"]
-    new = [{"name": m["name"], "text": m["text"]} for m in hist[req.since:] if m["name"] != req.name]
-    return {"room_name": room["name"], "messages": new, "next": len(hist)}
+    new = [{"name": m["name"], "text": m["text"]} for m in hist[req.since:] if m["name"] != self_name]
+    return {"room_name": room["name"], "messages": new, "next": len(hist), "my_name": self_name}
 
 class AgentSayReq(BaseModel):
     text: str
@@ -339,10 +395,13 @@ async def agent_say_http(req: AgentSayReq, x_agent_token: str = Header(None)):
     seat = next((s for s in room["seats"] if s["seat_id"] == bt["seat_id"]), None)
     if seat and not seat["used"]:
         seat["used"] = True; seat["claimed_by"] = req.name; seat["display_name"] = req.name
-    if room.get("auto_left", 0) <= 0:        # 自動往返預算用完,等真人發言
-        return {"ok": False, "dropped": True, "note": "等真人發言後才能再說"}
-    room["auto_left"] = room.get("auto_left", 0) - 1
-    msg = {"type": "message", "name": req.name, "text": req.text,
+    name = (seat.get("display_name") if seat else None) or req.name   # 房主可改的席位名優先
+    ar = room["settings"].get("auto_rounds", 6)
+    if ar >= 0:                              # ar < 0 = 無限,不擋
+        if room.get("auto_left", 0) <= 0:
+            return {"ok": False, "dropped": True, "note": "等真人發言後才能再說"}
+        room["auto_left"] = room.get("auto_left", 0) - 1
+    msg = {"type": "message", "name": name, "text": req.text,
            "time": datetime.now().strftime("%m-%d %H:%M")}
     room["history"].append(msg)
     await broadcast(bt["room_id"], msg)
@@ -417,6 +476,7 @@ def room_seats(room_id: str, authorization: str = Header(None), host: str = Head
     humans = [_seat_view(s, base) for s in r["seats"] if s["kind"] == "human"]
     agents = [_seat_view(s, base) for s in r["seats"] if s["kind"] == "agent"]
     return {"room_id": room_id, "name": r["name"], "owner": r["owner"],
+            "auto_rounds": r["settings"]["auto_rounds"],
             "human_seats": humans, "agent_seats": agents}
 
 
@@ -658,12 +718,14 @@ async def trigger_agents(room_id, msg):
     settings = room["settings"]
     transcript = build_context(room_id)
     for a in responders:
-        if room.get("auto_left", 0) <= 0:           # 自動往返預算用完,等下一個人發言
+        ar = settings.get("auto_rounds", 6)
+        if ar >= 0 and room.get("auto_left", 0) <= 0:   # ar<0=無限,不擋
             return
         msg_count = sum(1 for m in room["history"] if m.get("type") == "message")
         if msg_count >= settings["max_turns"]:      # 總訊息護欄
             return
-        room["auto_left"] = room.get("auto_left", 0) - 1   # 先扣再 await,確保預算不會超支
+        if ar >= 0:
+            room["auto_left"] = room.get("auto_left", 0) - 1
         prompt = (f"以下是多方協作聊天室「{room['name']}」的最近對話:\n{transcript}\n\n"
                   f"你是其中的「{a['display_name']}」。請根據你掌握的資料,自然接續討論、"
                   f"回應最新發言;只需回覆你要說的話,不必加說明。")
@@ -706,9 +768,11 @@ async def ws(websocket: WebSocket, session_token: str):
                 continue
             # 自動往返預算:真人發言重置;agent 發言扣;扣完就不再轉發 agent 的話,等真人說話
             if is_agent:
-                if room.get("auto_left", 0) <= 0:
-                    continue
-                room["auto_left"] = room.get("auto_left", 0) - 1
+                ar = settings.get("auto_rounds", 6)
+                if ar >= 0:                  # ar < 0 = 無限
+                    if room.get("auto_left", 0) <= 0:
+                        continue
+                    room["auto_left"] = room.get("auto_left", 0) - 1
             else:
                 room["auto_left"] = settings.get("auto_rounds", 6)
             msg = {"type": "message", "name": name, "text": data.get("text", ""),
