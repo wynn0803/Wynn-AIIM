@@ -179,13 +179,33 @@ def set_display(req: DisplayReq, authorization: str = Header(None)):
 # ═════════════════════════════════════════════════════════════
 # 建房間:設定『幾個真人席、幾個 Agent 席』,每席產生單次認領網址
 # ═════════════════════════════════════════════════════════════
+class PartySpec(BaseModel):
+    label: str = ""          # 受邀者標籤(可空,會自動給「受邀者 A/B…」)
+    agents: int = 0          # 這位參與者可接幾個 agent
+
 class CreateRoomReq(BaseModel):
     name: str
-    num_humans: int          # 真人席數量
-    num_agents: int          # Agent 席數量
+    my_agents: int = 1                      # 創群者自己要接幾個 agent
+    invitees: list[PartySpec] = []          # 每位受邀者 + 各自的 agent 數(逐一指定)
     max_turns: int = 50
     cost_budget: float = 2.00
     auto_rounds: int = 6     # 每次有人發言後,agent 們最多自動接幾句(防爆量/防無限迴圈)
+    # 舊欄位(相容用,新前端不送):
+    num_humans: int | None = None
+    num_agents: int | None = None
+
+def _party_label(i):          # 0->A, 1->B, …
+    return "受邀者 " + chr(65 + i) if i < 26 else f"受邀者 {i+1}"
+
+def _register_seat(rid, s):   # 把一個席位登記進 CLAIM / BOT_TOKENS 索引
+    CLAIM[s["claim_token"]] = {"room_id": rid, "seat_id": s["seat_id"]}
+    if s.get("bot_token"):
+        BOT_TOKENS[_hash_token(s["bot_token"])] = {"room_id": rid, "seat_id": s["seat_id"]}
+
+def _make_agent_seat(rid, owner_seat_id):
+    a = _new_seat("agent"); a["owner_seat"] = owner_seat_id
+    _register_seat(rid, a)
+    return a
 
 def _new_seat(kind):
     tok = secrets.token_urlsafe(18)
@@ -199,35 +219,47 @@ def _new_seat(kind):
             "used": False,                # token 已被鎖定(發出去/認領)→ 不再分給別人
             "connected": False,           # 真的有人/agent 連上線了 → 才算房裡的「成員」
             "reserved_by": None,          # 取了 agent token 但 agent 還沒連上的預約人(供冪等重用)
+            "label": None,                # 真人席的標籤(我 / 受邀者 A …),供群主分辨邀請連結
+            "owner_seat": None,           # agent 席屬於哪個真人席(誰的 agent)→ scoped 可見性
+            "auto_speak": True,           # agent 是否自動講話(可在房內切換;False=審核/只收不回)
             "created": time.time()}
 
 @app.post("/create-room")
 def create_room(req: CreateRoomReq, authorization: str = Header(None)):
     owner = current_user(authorization)
-    total = req.num_humans + req.num_agents
-    if total < 1 or total > 50:
-        raise HTTPException(400, "席位總數請在 1 到 50 之間")
-    if req.num_humans < 0 or req.num_agents < 0:
-        raise HTTPException(400, "人數不能是負的")
+    # 相容舊前端:若只送了 num_humans/num_agents,轉成新模型(全部 agent 歸創群者)
+    invitees = list(req.invitees)
+    my_agents = req.my_agents
+    if req.num_humans is not None or req.num_agents is not None:
+        nh = req.num_humans or 1; na = req.num_agents or 0
+        my_agents = na
+        invitees = [PartySpec(agents=0) for _ in range(max(0, nh - 1))]
+    if my_agents < 0 or any(p.agents < 0 for p in invitees):
+        raise HTTPException(400, "agent 數不能是負的")
+    total_seats = 1 + my_agents + sum(1 + p.agents for p in invitees)
+    if total_seats > 60:
+        raise HTTPException(400, "席位總數太多了(上限 60)")
     rid = "room_" + secrets.token_hex(6)
-    seats = ([_new_seat("human") for _ in range(req.num_humans)] +
-             [_new_seat("agent") for _ in range(req.num_agents)])
-    for s in seats:
-        CLAIM[s["claim_token"]] = {"room_id": rid, "seat_id": s["seat_id"]}
-        if s["kind"] == "agent":          # 每個 Agent 席當場登記一把 token
-            BOT_TOKENS[_hash_token(s["bot_token"])] = {"room_id": rid, "seat_id": s["seat_id"]}
-    # 房主建房即入座(佔第一個真人席)→ 之後點房間直接回聊天,不必再認領
-    h0 = next((s for s in seats if s["kind"] == "human"), None)
-    if h0:
-        h0["used"] = True; h0["connected"] = True; h0["claimed_by"] = owner
-        h0["display_name"] = USERS.get(owner, {}).get("display", owner)   # 房主用暱稱顯示
+    seats = []
+    # 1) 創群者的真人席(建房即入座)+ 他自己的 agent 席
+    me_seat = _new_seat("human"); me_seat["label"] = "我"
+    me_seat["used"] = True; me_seat["connected"] = True; me_seat["claimed_by"] = owner
+    me_seat["display_name"] = USERS.get(owner, {}).get("display", owner)
+    seats.append(me_seat); _register_seat(rid, me_seat)
+    for _ in range(my_agents):
+        seats.append(_make_agent_seat(rid, me_seat["seat_id"]))
+    # 2) 每位受邀者的真人席 + 各自的 agent 席
+    for i, p in enumerate(invitees):
+        hs = _new_seat("human"); hs["label"] = (p.label or "").strip() or _party_label(i)
+        seats.append(hs); _register_seat(rid, hs)
+        for _ in range(p.agents):
+            seats.append(_make_agent_seat(rid, hs["seat_id"]))
     ROOMS_DATA[rid] = {"name": req.name, "owner": owner, "seats": seats, "history": [],
                        "auto_left": req.auto_rounds,   # 初始就給預算 → agent 能先打招呼
                        "settings": {"max_turns": req.max_turns, "cost_budget": req.cost_budget,
                                     "auto_rounds": req.auto_rounds}}
     _save_rooms()
-    return {"ok": True, "room_id": rid, "name": req.name,
-            "num_humans": req.num_humans, "num_agents": req.num_agents}
+    return {"ok": True, "room_id": rid, "name": req.name}
 
 
 def _seat_view(s, base):
@@ -321,17 +353,18 @@ def claim_bot_token(req: ClaimBotReq, authorization: str = Header(None)):
     r = ROOMS_DATA.get(req.room_id)
     if not r:
         raise HTTPException(404, "找不到房間")
-    is_member = (r["owner"] == me) or any(s["claimed_by"] == me for s in r["seats"])
-    if not is_member:
+    my_hs = _my_human_seat(r, me)
+    if not my_hs:
         raise HTTPException(403, "你不在這個房間,先進場才能取 agent token")
     disp = USERS.get(me, {}).get("display", me)
+    # 只在『屬於我這席』的 agent 名額裡取(scoped):別人的 agent 席你拿不到
+    mine = [s for s in r["seats"] if s["kind"] == "agent" and s.get("owner_seat") == my_hs["seat_id"]]
     # 冪等:我先前取過、但 agent 還沒連上的那一席 → 直接給回同一把,別再吃掉一席
-    seat = next((s for s in r["seats"] if s["kind"] == "agent"
-                 and s.get("reserved_by") == me and not s.get("connected")), None)
+    seat = next((s for s in mine if s.get("reserved_by") == me and not s.get("connected")), None)
     if not seat:
-        seat = next((s for s in r["seats"] if s["kind"] == "agent" and not s["used"]), None)
+        seat = next((s for s in mine if not s["used"]), None)
     if not seat:
-        raise HTTPException(400, "沒有空的 Agent 席了")
+        raise HTTPException(400, "你的 agent 名額用完了(可請群主加)")
     seat["used"] = True                       # 鎖定這把 token(不再分給別人)
     seat["reserved_by"] = me                  # 但還沒 connected → 不算房裡成員、可冪等重用
     seat["claimed_by"] = f"{disp} 的 agent"
@@ -426,6 +459,91 @@ def rename_agent(req: RenameAgentReq, authorization: str = Header(None)):
     _save_rooms()
     return {"ok": True, "name": name}
 
+# ── #5 房內改人數 / agent 數(只有群主能改)──
+class AddInviteeReq(BaseModel):
+    room_id: str
+    label: str = ""
+    agents: int = 0
+
+@app.post("/add-invitee")
+def add_invitee(req: AddInviteeReq, authorization: str = Header(None), host: str = Header(None)):
+    me = current_user(authorization)
+    r = ROOMS_DATA.get(req.room_id)
+    if not r:
+        raise HTTPException(404, "找不到房間")
+    if r["owner"] != me:
+        raise HTTPException(403, "只有群主能加人")
+    if req.agents < 0 or len(r["seats"]) + 1 + req.agents > 60:
+        raise HTTPException(400, "數量不對或席位太多")
+    n_inv = sum(1 for s in r["seats"] if s["kind"] == "human" and s["seat_id"] != _my_human_seat(r, me)["seat_id"])
+    hs = _new_seat("human"); hs["label"] = (req.label or "").strip() or _party_label(n_inv)
+    r["seats"].append(hs); _register_seat(req.room_id, hs)
+    for _ in range(req.agents):
+        r["seats"].append(_make_agent_seat(req.room_id, hs["seat_id"]))
+    _save_rooms()
+    base = _base_from(authorization, host)
+    return {"ok": True, "seat_id": hs["seat_id"], "label": hs["label"],
+            "claim_url": f"{base}/?claim={hs['claim_token']}"}
+
+class SetPartyAgentsReq(BaseModel):
+    room_id: str
+    seat_id: str        # 某個真人席(某一方)
+    count: int          # 這一方的 agent 名額要變成幾個
+
+@app.post("/set-party-agents")
+def set_party_agents(req: SetPartyAgentsReq, authorization: str = Header(None)):
+    me = current_user(authorization)
+    r = ROOMS_DATA.get(req.room_id)
+    if not r:
+        raise HTTPException(404, "找不到房間")
+    if r["owner"] != me:
+        raise HTTPException(403, "只有群主能改 agent 數")
+    hs = next((s for s in r["seats"] if s["seat_id"] == req.seat_id and s["kind"] == "human"), None)
+    if not hs:
+        raise HTTPException(404, "找不到這個席位")
+    if req.count < 0 or req.count > 30:
+        raise HTTPException(400, "agent 數請在 0 到 30")
+    mine = [s for s in r["seats"] if s["kind"] == "agent" and s.get("owner_seat") == req.seat_id]
+    cur = len(mine)
+    if req.count > cur:
+        for _ in range(req.count - cur):
+            r["seats"].append(_make_agent_seat(req.room_id, req.seat_id))
+    elif req.count < cur:
+        removable = [s for s in mine if not s.get("connected")]   # 已連上的不能砍
+        to_remove = removable[:cur - req.count]
+        if len(to_remove) < cur - req.count:
+            raise HTTPException(400, "有 agent 已經連上線了,要先讓它離開才能減")
+        for s in to_remove:
+            CLAIM.pop(s["claim_token"], None)
+            if s.get("bot_token"):
+                BOT_TOKENS.pop(_hash_token(s["bot_token"]), None)
+            r["seats"].remove(s)
+    _save_rooms()
+    return {"ok": True, "count": req.count}
+
+# ── #6 切換某 agent 自動講話(群主 或 該 agent 的擁有者可改)──
+class SetAgentAutoReq(BaseModel):
+    room_id: str
+    seat_id: str
+    auto_speak: bool
+
+@app.post("/set-agent-auto")
+def set_agent_auto(req: SetAgentAutoReq, authorization: str = Header(None)):
+    me = current_user(authorization)
+    r = ROOMS_DATA.get(req.room_id)
+    if not r:
+        raise HTTPException(404, "找不到房間")
+    seat = next((s for s in r["seats"] if s["seat_id"] == req.seat_id and s["kind"] == "agent"), None)
+    if not seat:
+        raise HTTPException(404, "找不到這個 Agent 席")
+    my_hs = _my_human_seat(r, me)
+    owns = my_hs and seat.get("owner_seat") == my_hs["seat_id"]
+    if r["owner"] != me and not owns:
+        raise HTTPException(403, "只有群主或這個 agent 的擁有者能改")
+    seat["auto_speak"] = bool(req.auto_speak)
+    _save_rooms()
+    return {"ok": True, "auto_speak": seat["auto_speak"]}
+
 class AutoRoundsReq(BaseModel):
     room_id: str
     auto_rounds: int            # -1 = 無限
@@ -476,9 +594,11 @@ def agent_poll(req: AgentPollReq, x_agent_token: str = Header(None)):
         seat["claimed_by"] = req.name; seat["display_name"] = req.name
         _save_rooms()
     self_name = (seat.get("display_name") if seat else None) or req.name   # 以席位現名為準(被改名也對)
+    auto_speak = seat.get("auto_speak", True) if seat else True   # 房內被切成「不自動講話」→ agent 該只收不回
     hist = [m for m in room["history"] if m.get("type") == "message"]
     new = [{"name": m["name"], "text": m["text"]} for m in hist[req.since:] if m["name"] != self_name]
-    return {"room_name": room["name"], "messages": new, "next": len(hist), "my_name": self_name}
+    return {"room_name": room["name"], "messages": new, "next": len(hist),
+            "my_name": self_name, "auto_speak": auto_speak}
 
 class AgentSayReq(BaseModel):
     text: str
@@ -582,6 +702,48 @@ def room_seats(room_id: str, authorization: str = Header(None), host: str = Head
     return {"room_id": room_id, "name": r["name"], "owner": r["owner"],
             "auto_rounds": r["settings"]["auto_rounds"],
             "human_seats": humans, "agent_seats": agents}
+
+
+def _my_human_seat(r, me):
+    """登入者在這間房的真人席(創群者的『我』席 claimed_by 也是 owner)。"""
+    return next((s for s in r["seats"] if s["kind"] == "human" and s["claimed_by"] == me), None)
+
+def _agent_view(s):
+    return {"seat_id": s["seat_id"], "display_name": s.get("display_name"),
+            "claimed_by": s.get("claimed_by"), "connected": s.get("connected", False),
+            "used": s.get("used", False), "bot_token": s.get("bot_token"),
+            "auto_speak": s.get("auto_speak", True)}
+
+@app.get("/room/{room_id}/my-view")
+def room_my_view(room_id: str, authorization: str = Header(None), host: str = Header(None)):
+    """依登入者回傳『他該看到的東西』:自己的 agent token;群主才看得到的邀請連結。
+    群主與受邀者用同一個視圖,差別只在群主多『邀請連結 + 改房間』。"""
+    me = current_user(authorization)
+    r = ROOMS_DATA.get(room_id)
+    if not r:
+        raise HTTPException(404, "找不到房間")
+    is_owner = (r["owner"] == me)
+    my_hs = _my_human_seat(r, me)
+    if not my_hs and not is_owner:
+        raise HTTPException(403, "你不在這間房")
+    base = _base_from(authorization, host)
+    my_seat_id = my_hs["seat_id"] if my_hs else None
+    my_agents = [_agent_view(s) for s in r["seats"]
+                 if s["kind"] == "agent" and s.get("owner_seat") == my_seat_id]
+    invites = []
+    if is_owner:                                  # 群主才看得到要發給別人的邀請連結
+        for s in r["seats"]:
+            if s["kind"] == "human" and s["seat_id"] != my_seat_id:
+                cnt = sum(1 for a in r["seats"] if a["kind"] == "agent" and a.get("owner_seat") == s["seat_id"])
+                invites.append({"seat_id": s["seat_id"], "label": s.get("label") or "受邀者",
+                                "claim_url": f"{base}/?claim={s['claim_token']}",
+                                "claimed_by": s.get("claimed_by"), "connected": s.get("connected", False),
+                                "agent_count": cnt})
+    return {"room_id": room_id, "name": r["name"], "is_owner": is_owner,
+            "my_seat": {"seat_id": my_seat_id, "label": (my_hs.get("label") if my_hs else "我"),
+                        "display_name": (my_hs.get("display_name") if my_hs else None)},
+            "my_agents": my_agents, "invites": invites,
+            "auto_rounds": r["settings"]["auto_rounds"]}
 
 
 @app.get("/my-rooms")
@@ -822,7 +984,10 @@ async def trigger_agents(room_id, msg):
         return
     agents = AGENTS.get(room_id, [])
     speaker = msg["name"]
-    responders = [a for a in agents if a["display_name"] != speaker]   # 不回自己
+    def _muted(a):     # 房內把這個 agent 切成「不自動講話」→ 平台代接的就直接不回(硬擋)
+        s = next((x for x in room["seats"] if x["seat_id"] == a.get("seat_id")), None)
+        return bool(s and not s.get("auto_speak", True))
+    responders = [a for a in agents if a["display_name"] != speaker and not _muted(a)]   # 不回自己、不回被靜音的
     if not responders:
         return
     settings = room["settings"]

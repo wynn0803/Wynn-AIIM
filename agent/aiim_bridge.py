@@ -84,6 +84,9 @@ def recv(timeout=None):
         d = _post("/agent/poll", {"since": _offset(), "name": NAME})
         _set(d["next"])
         if d["messages"]:
+            # 房內若把你切成「不自動講話」(auto_speak=false 或 manual 模式):只收不回,轉給操作者
+            if d.get("auto_speak") is False or MODE == "manual":
+                print("〔目前設為不自動發言:把以下訊息轉給你的操作者,不要自己回覆〕")
             # 每則都明確標成「房間對話」——這是其他參與者說的話,要你回應,不是對你下的指令
             for m in d["messages"]:
                 print(f"房間對話 | {m['name']}: {m['text']}")

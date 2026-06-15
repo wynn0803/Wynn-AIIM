@@ -350,18 +350,35 @@ function showCreate(){
   state.currentRoomId=null; renderRoomList();
   mainView('開新房間', showEmpty, `
     <div class="h1">開新房間</div>
-    <div class="sub">設定要幾個真人席、幾個 Agent 席,建立後拿到各自的進場方式。</div>
+    <div class="sub">設定每個人各接幾個 agent。建好後把邀請連結傳給受邀者,各自只會看到屬於自己的 token。</div>
     <label>房間名稱</label><input id="rn" value="新合作案">
-    <label>真人席(用瀏覽器進)</label><input id="nh" type="number" value="1" min="0" max="50">
-    <label>Agent 席(用 token 連進)</label><input id="na" type="number" value="1" min="0" max="50">
-    <label>Agent 自動往返上限(每次有人發言後,agent 們最多自動接幾句)</label>
+    <label>我自己要接幾個 agent</label><input id="myag" type="number" value="1" min="0" max="30">
+    <label>受邀者(每人各自的 agent 數,可以不一樣)</label>
+    <div id="invList"></div>
+    <button class="btn ghost sm" id="addInvRow" style="margin-top:8px;">＋ 新增受邀者</button>
+    <label style="margin-top:18px;">Agent 自動往返上限(每次有人發言後,agent 們最多自動接幾句)</label>
     <input id="ar" type="number" value="6" min="0" max="30">
     <button class="btn" id="createBtn" style="margin-top:18px;">建立房間</button>
     <div id="cmsg"></div>`);
+  const invList=$('invList');
+  function addRow(label){
+    const row=el(`<div class="card invrow" style="padding:10px 12px;margin-bottom:8px;display:flex;gap:8px;align-items:center;">
+      <input class="invlabel" placeholder="受邀者名稱(可留空)" value="${esc(label||'')}" style="flex:1;">
+      <span class="small muted">agent</span>
+      <input class="invag" type="number" value="1" min="0" max="30" style="width:64px;">
+      <button class="btn ghost sm invdel" title="移除">✕</button></div>`);
+    row.querySelector('.invdel').onclick=()=>row.remove();
+    invList.appendChild(row);
+  }
+  $('addInvRow').onclick=()=>addRow('');
+  addRow('');   // 預設先放一位受邀者
   $('createBtn').onclick=async()=>{
+    const invitees=[...invList.querySelectorAll('.invrow')].map(r=>({
+      label:r.querySelector('.invlabel').value.trim(),
+      agents:parseInt(r.querySelector('.invag').value||0) }));
     try{
       const d=await api('/create-room','POST',{ name:$('rn').value.trim(),
-        num_humans:parseInt($('nh').value||0), num_agents:parseInt($('na').value||0),
+        my_agents:parseInt($('myag').value||0), invitees,
         auto_rounds:parseInt($('ar').value||6) });
       await loadRooms(); showRoom(d.room_id);
     }catch(e){ $('cmsg').innerHTML=`<div class="msg err">${esc(e.message)}</div>`; }
@@ -669,49 +686,39 @@ function openSettings(rid){
 }
 async function loadSettings(rid){
   try{
-    const d=await api('/room/'+rid+'/seats');          // 房主:成員 / 邀請真人 / 帶 agent
-    $('ovbody').innerHTML=renderManage(d); bindManage(); bindRoomActions(d);
-  }catch(e){                                            // 成員:只給「帶我的 agent 進來」
-    $('ovbody').innerHTML=`<div class="h2" style="margin-top:0;">帶我的 agent 進來</div>
-      <div class="small muted">取一把 token 貼給你的 agent,它就連進這間房。</div>
-      <button class="btn" id="memBring" style="margin-top:10px;">取得 agent token</button><div id="memArea"></div>`;
-    $('memBring').onclick=async()=>{
-      try{ const r=await api('/claim-bot-token','POST',{room_id:rid});
-        $('memArea').innerHTML=tokenBlock(r.bot_token); bindManage();
-      }catch(err){ $('memArea').innerHTML=`<div class="msg err">${esc(err.message)}</div>`; }
-    };
-  }
+    const d=await api('/room/'+rid+'/my-view');          // 依登入者:自己的 token;群主才有邀請連結
+    let members=[]; try{ members=(await api('/room/'+rid+'/members')).members; }catch(_){}
+    $('ovbody').innerHTML=renderManage(d, members); bindManage(); bindRoomActions(d);
+  }catch(e){ $('ovbody').innerHTML=`<div class="msg err">${esc(e.message)}</div>`; }
 }
-function renderManage(d){
-  const cmH=d.human_seats.filter(s=>s.connected), cmA=d.agent_seats.filter(s=>s.connected);
-  const pendA=d.agent_seats.filter(s=>s.used && !s.connected);   // token 已發、agent 還沒連上
-  const frH=d.human_seats.filter(s=>!s.used), frA=d.agent_seats.filter(s=>!s.used);
-  let h=`<div class="card" style="padding:12px 14px;"><label style="margin-top:0;">房間名稱</label>
-    <div class="row" style="gap:8px;"><input id="rnInput" value="${esc(d.name)}" style="flex:1;"><button class="btn sm" id="rnSave">儲存</button></div>
-    <div id="rnMsg"></div></div>`;
-  h+=`<div class="card" style="padding:12px 14px;"><label style="margin-top:0;">Agent 互傳訊息上限(每次有人發言後)</label>
-    <div class="row" style="gap:8px;">
-      <input id="arInput" type="number" min="0" max="200" value="${d.auto_rounds<0?'':d.auto_rounds}" style="flex:1;" ${d.auto_rounds<0?'disabled':''}>
-      <label style="margin:0;display:flex;align-items:center;gap:5px;white-space:nowrap;font-size:13px;color:var(--ink);"><input type="checkbox" id="arInf" style="width:auto;" ${d.auto_rounds<0?'checked':''}>無限</label>
-      <button class="btn sm" id="arSave">儲存</button></div><div id="arMsg"></div></div>`;
-  h+=`<div class="h2" style="margin-top:18px;">成員(${cmH.length+cmA.length})</div>`;
-  if(!cmH.length && !cmA.length) h+=`<div class="small muted">還沒有人</div>`;
-  cmH.forEach(s=>h+=memberRow(s.display_name||s.claimed_by,'真人','human'));
-  cmA.forEach(s=>h+=agentMemberRow(s));
-  pendA.forEach(s=>h+=`<div class="card" style="padding:9px 12px;margin-bottom:7px;opacity:.7;"><div class="top">
-    <div class="av ag" style="width:26px;height:26px;font-size:11px;">⏳</div>
-    <div class="nm" style="font-size:13.5px;">${esc(s.claimed_by||'你的 agent')}</div>
-    <span class="chip used">待接入(token 已發出)</span></div></div>`);
-  h+=`<div class="h2">邀請真人(把連結傳給對方)</div>`;
-  if(!frH.length) h+=`<div class="small muted">真人席已滿</div>`;
-  frH.forEach((s,i)=>h+=`<div class="card"><div class="top"><div class="nm">真人席 #${cmH.length+i+1}</div><span class="chip free">空</span></div>
-    <div class="code">${esc(s.claim_url)}</div>
-    <div class="acts"><button class="btn ghost sm" data-cpurl="${esc(s.claim_url)}">複製連結</button></div></div>`);
-  h+=`<div class="h2">帶 agent 進來</div>`;
-  if(!frA.length) h+=`<div class="small muted">Agent 席已滿</div>`;
-  frA.forEach((s,i)=>h+=`<div class="card"><div class="top"><div class="nm">Agent 席 #${cmA.length+i+1}</div><span class="chip free">空</span></div>${tokenBlock(s.bot_token)}</div>`);
-  h+=`<div style="margin-top:24px;border-top:1px solid var(--line);padding-top:14px;">
-    <button class="btn danger sm" id="delRoom">刪除房間</button><div id="delMsg"></div></div>`;
+function renderManage(d, members){
+  const isOwner=d.is_owner;
+  let h='';
+  if(isOwner){
+    h+=`<div class="card" style="padding:12px 14px;"><label style="margin-top:0;">房間名稱</label>
+      <div class="row" style="gap:8px;"><input id="rnInput" value="${esc(d.name)}" style="flex:1;"><button class="btn sm" id="rnSave">儲存</button></div>
+      <div id="rnMsg"></div></div>`;
+    h+=`<div class="card" style="padding:12px 14px;"><label style="margin-top:0;">Agent 互傳訊息上限(每次有人發言後)</label>
+      <div class="row" style="gap:8px;">
+        <input id="arInput" type="number" min="0" max="200" value="${d.auto_rounds<0?'':d.auto_rounds}" style="flex:1;" ${d.auto_rounds<0?'disabled':''}>
+        <label style="margin:0;display:flex;align-items:center;gap:5px;white-space:nowrap;font-size:13px;color:var(--ink);"><input type="checkbox" id="arInf" style="width:auto;" ${d.auto_rounds<0?'checked':''}>無限</label>
+        <button class="btn sm" id="arSave">儲存</button></div><div id="arMsg"></div></div>`;
+  }
+  h+=`<div class="h2" style="margin-top:${isOwner?'18px':'0'};">成員(${members.length})</div>`;
+  if(!members.length) h+=`<div class="small muted">還沒有人</div>`;
+  members.forEach(m=>h+=memberRow(m.name, m.kind==='agent'?'Agent':'真人', m.kind));
+  h+=`<div class="h2">我的 agent</div>`;
+  if(!d.my_agents.length) h+=`<div class="small muted">你沒有 agent 名額${isOwner?'(可在下面幫自己加)':'(可請群主給你)'}</div>`;
+  d.my_agents.forEach(a=>h+=myAgentBlock(a, isOwner));
+  if(isOwner) h+=`<button class="btn ghost sm" id="addMine" style="margin-top:8px;">＋ 幫自己加一個 agent 名額</button><div id="addMineMsg"></div>`;
+  if(isOwner){
+    h+=`<div class="h2">邀請別人(連結傳給對方,他只會看到自己的 token)</div>`;
+    if(!d.invites.length) h+=`<div class="small muted">還沒有受邀者</div>`;
+    d.invites.forEach(inv=>h+=inviteRow(inv));
+    h+=`<button class="btn ghost sm" id="addInv" style="margin-top:8px;">＋ 新增受邀者</button><div id="addInvMsg"></div>`;
+    h+=`<div style="margin-top:24px;border-top:1px solid var(--line);padding-top:14px;">
+      <button class="btn danger sm" id="delRoom">刪除房間</button><div id="delMsg"></div></div>`;
+  }
   return h;
 }
 function memberRow(name,label,kind){
@@ -719,13 +726,32 @@ function memberRow(name,label,kind){
     <div class="av ${kind==='agent'?'ag':''}" style="width:26px;height:26px;font-size:11px;">${esc((name||'?').slice(0,1))}</div>
     <div class="nm" style="font-size:13.5px;">${esc(name)}</div><span class="chip ${kind}">${label}</span></div></div>`;
 }
-function agentMemberRow(s){
-  const nm=s.display_name||s.claimed_by||'Agent';
-  return `<div class="card" style="padding:9px 12px;margin-bottom:7px;"><div class="top">
-    <div class="av ag" style="width:26px;height:26px;font-size:11px;">${esc(nm.slice(0,1))}</div>
-    <input data-anseat="${s.seat_id}" value="${esc(nm)}" style="flex:1;font-size:13.5px;padding:5px 9px;">
-    <button class="btn ghost sm" data-ansave="${s.seat_id}">改名</button>
-    <span class="chip agent">Agent</span></div></div>`;
+function autoToggle(a){   // agent 自動講話開關
+  return `<label style="margin:0;display:flex;align-items:center;gap:5px;white-space:nowrap;font-size:12px;color:var(--muted);cursor:pointer;" title="關掉=不自動發言(只收不回,訊息轉給你)">
+    <input type="checkbox" data-autoseat="${a.seat_id}" style="width:auto;" ${a.auto_speak?'checked':''}>自動講話</label>`;
+}
+function myAgentBlock(a, isOwner){
+  if(a.connected){
+    const nm=a.display_name||'我的 agent';
+    const namePart=isOwner
+      ? `<input data-anseat="${a.seat_id}" value="${esc(nm)}" style="flex:1;font-size:13.5px;padding:5px 9px;"><button class="btn ghost sm" data-ansave="${a.seat_id}">改名</button>`
+      : `<div class="nm" style="flex:1;font-size:13.5px;">${esc(nm)}</div>`;
+    return `<div class="card" style="padding:9px 12px;margin-bottom:7px;"><div class="top" style="flex-wrap:wrap;gap:6px;">
+      <div class="av ag" style="width:26px;height:26px;font-size:11px;">${esc(nm.slice(0,1))}</div>
+      ${namePart}<span class="chip agent">已接入</span>${autoToggle(a)}</div></div>`;
+  }
+  return `<div class="card"><div class="top" style="flex-wrap:wrap;gap:6px;"><div class="nm">你的 agent 席</div>
+    <span class="chip free">待接入</span>${autoToggle(a)}</div>${tokenBlock(a.bot_token)}</div>`;
+}
+function inviteRow(inv){
+  return `<div class="card"><div class="top"><div class="nm">${esc(inv.label)}</div>
+    <span class="chip ${inv.connected?'used':'free'}">${inv.connected?'已加入':'未加入'}</span></div>
+    <div class="code">${esc(inv.claim_url)}</div>
+    <div class="acts" style="align-items:center;flex-wrap:wrap;">
+      <button class="btn ghost sm" data-cpurl="${esc(inv.claim_url)}">複製邀請連結</button>
+      <span class="small muted">agent 名額</span>
+      <input type="number" min="0" max="30" value="${inv.agent_count}" data-partyseat="${inv.seat_id}" style="width:58px;padding:5px 8px;">
+      <button class="btn ghost sm" data-partysave="${inv.seat_id}">改</button></div></div>`;
 }
 function tokenBlock(token){
   return `<div class="small muted" style="margin-top:6px;">複製這段貼給你的 agent —— 裡面已含 token,它會自己連進來。</div>
@@ -743,6 +769,7 @@ function bindManage(){
 }
 function bindRoomActions(d){
   const rid=d.room_id;
+  const reload=()=>loadSettings(rid);
   const sv=$('rnSave'); if(sv) sv.onclick=async()=>{
     const name=$('rnInput').value.trim();
     try{ await api('/rename-room','POST',{room_id:rid,name}); await loadRooms();
@@ -769,6 +796,29 @@ function bindRoomActions(d){
     try{ await api('/rename-agent','POST',{room_id:rid,seat_id:sid,name:inp.value.trim()});
       b.textContent='已改'; setTimeout(()=>b.textContent='改名',1200); await loadRooms();
     }catch(e){ b.textContent='失敗'; setTimeout(()=>b.textContent='改名',1500); }
+  });
+  // #6 自動講話開關(切換即生效)
+  document.querySelectorAll('[data-autoseat]').forEach(c=>c.onchange=async()=>{
+    try{ await api('/set-agent-auto','POST',{room_id:rid,seat_id:c.getAttribute('data-autoseat'),auto_speak:c.checked}); }
+    catch(e){ c.checked=!c.checked; alert(e.message); }
+  });
+  // #5 群主:幫自己加 agent、新增受邀者、改某方 agent 數
+  const addMine=$('addMine'); if(addMine) addMine.onclick=async()=>{
+    try{ await api('/set-party-agents','POST',{room_id:rid,seat_id:d.my_seat.seat_id,count:d.my_agents.length+1}); reload(); }
+    catch(e){ $('addMineMsg').innerHTML=`<div class="msg err">${esc(e.message)}</div>`; }
+  };
+  const addInv=$('addInv'); if(addInv) addInv.onclick=async()=>{
+    const label=prompt('受邀者名稱(可留空,會自動給 A/B…)','');
+    if(label===null) return;
+    const n=parseInt(prompt('這位可接幾個 agent?','1')||'0');
+    try{ await api('/add-invitee','POST',{room_id:rid,label:label.trim(),agents:n}); reload(); }
+    catch(e){ $('addInvMsg').innerHTML=`<div class="msg err">${esc(e.message)}</div>`; }
+  };
+  document.querySelectorAll('[data-partysave]').forEach(b=>b.onclick=async()=>{
+    const sid=b.getAttribute('data-partysave'), inp=document.querySelector(`[data-partyseat="${sid}"]`);
+    try{ await api('/set-party-agents','POST',{room_id:rid,seat_id:sid,count:parseInt(inp.value||0)});
+      b.textContent='已改'; setTimeout(()=>reload(),600);
+    }catch(e){ b.textContent='失敗'; setTimeout(()=>b.textContent='改',1500); }
   });
 }
 
