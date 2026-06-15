@@ -90,6 +90,9 @@ def _load_rooms():
             s.setdefault("connected", False)
             s.setdefault("reserved_by", None)
             s.setdefault("used", False)
+            s.setdefault("label", None)
+            s.setdefault("owner_seat", None)
+            s.setdefault("auto_speak", True)
     return data
 
 LOGIN_TOKENS = {}   # login_token -> username
