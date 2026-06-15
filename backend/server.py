@@ -66,6 +66,32 @@ def _save_users():
         pass
 
 USERS = _load_users()   # username -> {pw_hash, salt, display}
+
+# 房間/訊息持久化:重啟後端也不掉房間與對話(單一真相=ROOMS_DATA;
+# 邀請券 CLAIM 與 agent token BOT_TOKENS 開機時從房間資料重建,不另存。
+# 注意:平台代接 agent 的設定 AGENTS 含 API 金鑰,刻意「不」寫入磁碟。)
+ROOMS_FILE = os.path.join(DATA_DIR, "rooms.json")
+
+def _save_rooms():
+    try:
+        with open(ROOMS_FILE, "w", encoding="utf-8") as f:
+            json.dump(ROOMS_DATA, f, ensure_ascii=False)
+    except Exception:
+        pass
+
+def _load_rooms():
+    try:
+        with open(ROOMS_FILE, encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception:
+        return {}
+    for r in data.values():                      # 補齊舊資料可能缺的欄位
+        for s in r.get("seats", []):
+            s.setdefault("connected", False)
+            s.setdefault("reserved_by", None)
+            s.setdefault("used", False)
+    return data
+
 LOGIN_TOKENS = {}   # login_token -> username
 ROOMS_DATA = {}     # room_id -> {name, owner, seats[], history[], settings{}}
 CLAIM = {}          # claim_token -> {room_id, seat_id}
@@ -146,6 +172,7 @@ def set_display(req: DisplayReq, authorization: str = Header(None)):
         for s in r["seats"]:
             if s["kind"] == "human" and s["claimed_by"] == me:
                 s["display_name"] = name
+    _save_rooms()
     return {"ok": True, "display_name": name}
 
 
@@ -198,6 +225,7 @@ def create_room(req: CreateRoomReq, authorization: str = Header(None)):
                        "auto_left": req.auto_rounds,   # 初始就給預算 → agent 能先打招呼
                        "settings": {"max_turns": req.max_turns, "cost_budget": req.cost_budget,
                                     "auto_rounds": req.auto_rounds}}
+    _save_rooms()
     return {"ok": True, "room_id": rid, "name": req.name,
             "num_humans": req.num_humans, "num_agents": req.num_agents}
 
@@ -219,6 +247,19 @@ def _seat_view(s, base):
 # ═════════════════════════════════════════════════════════════
 def _hash_token(tok):
     return hashlib.sha256((tok or "").encode()).hexdigest()
+
+def _rebuild_indexes():
+    """從持久化的房間資料重建邀請券 / agent token 索引(開機用)。"""
+    CLAIM.clear(); BOT_TOKENS.clear()
+    for rid, r in ROOMS_DATA.items():
+        for s in r.get("seats", []):
+            if s.get("claim_token"):
+                CLAIM[s["claim_token"]] = {"room_id": rid, "seat_id": s["seat_id"]}
+            if s.get("bot_token"):
+                BOT_TOKENS[_hash_token(s["bot_token"])] = {"room_id": rid, "seat_id": s["seat_id"]}
+
+ROOMS_DATA.update(_load_rooms())   # 開機載回房間與對話
+_rebuild_indexes()
 
 class CreateAgentReq(BaseModel):
     name: str
@@ -294,6 +335,7 @@ def claim_bot_token(req: ClaimBotReq, authorization: str = Header(None)):
     seat["used"] = True                       # 鎖定這把 token(不再分給別人)
     seat["reserved_by"] = me                  # 但還沒 connected → 不算房裡成員、可冪等重用
     seat["claimed_by"] = f"{disp} 的 agent"
+    _save_rooms()
     return {"ok": True, "seat_id": seat["seat_id"], "bot_token": seat["bot_token"],
             "msg": "這把 token 只顯示一次,複製貼進你的 AIIM 外掛"}
 
@@ -332,6 +374,7 @@ def rename_room(req: RenameReq, authorization: str = Header(None)):
     if not name:
         raise HTTPException(400, "房間名稱不能空白")
     r["name"] = name
+    _save_rooms()
     return {"ok": True, "name": name}
 
 class RoomRefReq(BaseModel):
@@ -354,6 +397,7 @@ def delete_room(req: RoomRefReq, authorization: str = Header(None)):
     for k in [k for k, v in SESSIONS.items() if v.get("room_id") == req.room_id]:
         SESSIONS.pop(k, None)
     ROOMS_DATA.pop(req.room_id, None)
+    _save_rooms()
     return {"ok": True}
 
 class RenameAgentReq(BaseModel):
@@ -379,6 +423,7 @@ def rename_agent(req: RenameAgentReq, authorization: str = Header(None)):
     seat["display_name"] = name
     if seat.get("claimed_by"):
         seat["claimed_by"] = name
+    _save_rooms()
     return {"ok": True, "name": name}
 
 class AutoRoundsReq(BaseModel):
@@ -396,6 +441,7 @@ def set_auto_rounds(req: AutoRoundsReq, authorization: str = Header(None)):
     r["settings"]["auto_rounds"] = req.auto_rounds
     if req.auto_rounds >= 0:
         r["auto_left"] = req.auto_rounds
+    _save_rooms()
     return {"ok": True, "auto_rounds": req.auto_rounds}
 
 @app.get("/room/{room_id}/members")
@@ -428,6 +474,7 @@ def agent_poll(req: AgentPollReq, x_agent_token: str = Header(None)):
     if seat and not seat.get("connected"):           # agent 第一次真的連上 → 才登記為成員、套用它的名字
         seat["used"] = True; seat["connected"] = True
         seat["claimed_by"] = req.name; seat["display_name"] = req.name
+        _save_rooms()
     self_name = (seat.get("display_name") if seat else None) or req.name   # 以席位現名為準(被改名也對)
     hist = [m for m in room["history"] if m.get("type") == "message"]
     new = [{"name": m["name"], "text": m["text"]} for m in hist[req.since:] if m["name"] != self_name]
@@ -458,6 +505,7 @@ async def agent_say_http(req: AgentSayReq, x_agent_token: str = Header(None)):
     msg = {"type": "message", "id": secrets.token_hex(6), "name": name, "text": req.text,
            "time": datetime.now().strftime("%m-%d %H:%M")}
     room["history"].append(msg)
+    _save_rooms()
     await broadcast(bt["room_id"], msg)
     return {"ok": True}
 
@@ -480,6 +528,7 @@ def agent_connect(req: AgentConnectReq, x_agent_token: str = Header(None)):
     seat["connected"] = True
     seat["claimed_by"] = req.display_name
     seat["display_name"] = req.display_name
+    _save_rooms()
     session = secrets.token_urlsafe(24)
     SESSIONS[session] = {"room_id": bt["room_id"], "seat_id": bt["seat_id"],
                          "display_name": req.display_name}
@@ -620,6 +669,7 @@ def claim(req: ClaimReq, authorization: str = Header(None)):
     seat["display_name"] = req.display_name
     seat["agent_pubkey"] = req.agent_pubkey_hex
     PENDING.pop(req.claim_token, None)
+    _save_rooms()
 
     session = secrets.token_urlsafe(24)
     reconnect = secrets.token_urlsafe(24)
@@ -743,6 +793,7 @@ async def attach_agent(req: AttachReq, authorization: str = Header(None)):
     seat["connected"] = True
     seat["claimed_by"] = me
     seat["display_name"] = req.display_name
+    _save_rooms()
     AGENTS.setdefault(c["room_id"], []).append(
         {"seat_id": seat["seat_id"], "display_name": req.display_name, "config": req.agent})
     await broadcast(c["room_id"], {"type": "system", "text": f"{req.display_name}(Agent)已接入"})
@@ -758,6 +809,7 @@ async def agent_say(room_id, name, text):
     msg = {"type": "message", "id": secrets.token_hex(6), "name": name, "text": text,
            "time": datetime.now().strftime("%m-%d %H:%M")}
     ROOMS_DATA[room_id]["history"].append(msg)
+    _save_rooms()
     await broadcast(room_id, msg)
     # agent 的發言也可能引出其他 agent 回應(agent 之間自動往返),受 auto_left 預算約束
     asyncio.create_task(trigger_agents(room_id, msg))
@@ -824,6 +876,7 @@ async def ws(websocket: WebSocket, session_token: str):
                 for m in room["history"]:
                     if m.get("id") == mid and m.get("name") == name:
                         m["recalled"] = True; m["text"] = ""
+                        _save_rooms()
                         await broadcast(rid, {"type": "recalled", "id": mid})
                         break
                 continue
@@ -846,6 +899,7 @@ async def ws(websocket: WebSocket, session_token: str):
             msg = {"type": "message", "id": secrets.token_hex(6), "name": name, "text": data.get("text", ""),
                    "time": datetime.now().strftime("%m-%d %H:%M")}
             room["history"].append(msg)
+            _save_rooms()
             await broadcast(rid, msg)
             if not is_agent:                       # 真人發言才另外觸發「伺服器端代接」的 agent
                 asyncio.create_task(trigger_agents(rid, msg))
