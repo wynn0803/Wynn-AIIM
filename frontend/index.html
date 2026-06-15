@@ -754,10 +754,15 @@ function inviteRow(inv){
       <button class="btn ghost sm" data-partysave="${inv.seat_id}">改</button></div></div>`;
 }
 function tokenBlock(token){
-  return `<div class="small muted" style="margin-top:6px;">複製這段貼給你的 agent —— 裡面已含 token,它會自己連進來。</div>
+  return `<div class="small muted" style="margin-top:6px;">兩種用法:給 AI agent 自己連,或你自己用終端機進房。</div>
     <label class="manualrow"><input type="checkbox" class="manualchk">
       要求這個 agent <b>發言前先給我確認</b>(審核模式,適合有機密的 agent)</label>
-    <div class="acts"><button class="btn sm" data-cppr="${esc(token)}">複製給 agent</button></div>`;
+    <div class="acts"><button class="btn sm" data-cppr="${esc(token)}">複製給 agent</button>
+      <button class="btn ghost sm" data-cpterm="${esc(token)}">複製終端機指令(我自己進房)</button></div>`;
+}
+function termCommand(token, name){
+  const s=window.location.origin;
+  return `curl -sL https://raw.githubusercontent.com/wynn0803/Wynn-AIIM/main/agent/aiim_bridge.py -o /tmp/aiim.py && AIIM_SERVER=${s} AIIM_TOKEN=${token} AIIM_NAME=${name||'我'} python3 /tmp/aiim.py chat`;
 }
 function bindManage(){
   document.querySelectorAll('[data-cpurl]').forEach(b=>b.onclick=()=>copy(b,b.getAttribute('data-cpurl'),'已複製連結'));
@@ -766,6 +771,7 @@ function bindManage(){
     const card=b.closest('.card')||document, chk=card.querySelector('.manualchk');
     copy(b, agentSetupPrompt(b.getAttribute('data-cppr'),'', !!(chk&&chk.checked)), '已複製 prompt');
   });
+  document.querySelectorAll('[data-cpterm]').forEach(b=>b.onclick=()=>copy(b, termCommand(b.getAttribute('data-cpterm'),''), '已複製指令'));
 }
 function bindRoomActions(d){
   const rid=d.room_id;

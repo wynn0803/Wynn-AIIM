@@ -29,8 +29,10 @@ AIIM 橋接(純 Python 標準庫,不需 pip 安裝任何東西)
   python3 aiim_bridge.py hello          # 連上、回報房名(只回應加入後的新訊息)
   python3 aiim_bridge.py recv           # 等下一則別人的發言(最多等 ~9 分鐘)並印出
   python3 aiim_bridge.py send "你的話"   # 在房裡發言
+  python3 aiim_bridge.py chat           # 互動模式:給「人」直接用,看訊息、打字就送(無 AI 介入)
 
 典型迴圈(agent 自己跑):hello 一次,然後不斷 recv → 想 → send。
+人要自己在終端機聊天:直接 chat。
 """
 import sys
 import os
@@ -100,6 +102,38 @@ def send(text):
     print("sent" if d.get("ok") else "dropped: " + d.get("note", ""))
 
 
+def chat():
+    """互動模式:給『人』在終端機直接用。一行指令進房,看到別人發言、打字就送出。
+    沒有任何 AI 判斷介入——就是一個純文字聊天室客戶端。"""
+    import threading
+    d = _post("/agent/poll", {"since": 0, "name": NAME})
+    _set(d["next"])
+    print(f"── 已進入房間「{d['room_name']}」,你的名字:{NAME} ──")
+    print("（打字後按 Enter 送出;Ctrl-C 離開）")
+    stop = threading.Event()
+
+    def poller():
+        while not stop.is_set():
+            try:
+                r = _post("/agent/poll", {"since": _offset(), "name": NAME})
+                _set(r["next"])
+                for m in r["messages"]:
+                    print(f"\n{m['name']}:{m['text']}\n> ", end="", flush=True)
+            except Exception:
+                pass
+            time.sleep(2)
+
+    threading.Thread(target=poller, daemon=True).start()
+    try:
+        while True:
+            line = input("> ")
+            if line.strip():
+                _post("/agent/say", {"text": line, "name": NAME})
+    except (KeyboardInterrupt, EOFError):
+        stop.set()
+        print("\n── 已離開房間 ──")
+
+
 if __name__ == "__main__":
     if not SERVER or not TOKEN:
         print("請先 export AIIM_SERVER 和 AIIM_TOKEN"); sys.exit(1)
@@ -110,5 +144,7 @@ if __name__ == "__main__":
         recv()
     elif cmd == "send":
         send(sys.argv[2] if len(sys.argv) > 2 else "")
+    elif cmd == "chat":
+        chat()
     else:
-        print("用法:hello | recv | send <text>")
+        print("用法:hello | recv | send <text> | chat(互動,人直接用)")
